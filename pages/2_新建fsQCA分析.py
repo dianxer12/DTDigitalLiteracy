@@ -18,16 +18,58 @@ if not datasets:
     st.info("请先在「数据集管理」页面上传数据并构建维度。")
     st.stop()
 
-options = {f"{d['name']} ({d['dataset_id']})": d for d in datasets}
-selected_label = st.selectbox("选择数据集", list(options.keys()))
+# ---- Classify datasets: scored vs raw ----
+def _looks_scored(d: dict, df: pd.DataFrame) -> bool:
+    if "_scored" in d.get("name", "").lower():
+        return True
+    dim_prefixes = ("os_", "we_", "dc_", "dl_")
+    if df.shape[1] <= 25 and any(str(c).startswith(dim_prefixes) for c in df.columns):
+        return True
+    return False
+
+_scored_map: dict[str, bool] = {}
+for d in datasets:
+    try:
+        _df = load_prepared_data(get_dataset_dir(d["dataset_id"], DEFAULT_PROJECT_ID))
+        _scored_map[d["dataset_id"]] = _looks_scored(d, _df)
+    except Exception:
+        _scored_map[d["dataset_id"]] = False
+
+scored_list = [d for d in datasets if _scored_map.get(d["dataset_id"], False)]
+raw_list = [d for d in datasets if not _scored_map.get(d["dataset_id"], False)]
+
+if not scored_list:
+    st.warning("⚠️ 没有找到已构建维度的数据集。")
+    st.markdown("请先到 **数据集管理 → 构建维度** 加载预设并点击「计算维度得分」。")
+    if raw_list:
+        st.caption(f"当前有 {len(raw_list)} 个原始数据集，但尚未计算维度得分。")
+    st.stop()
+
+# Build selector – mark scored vs raw
+def _opt_label(d: dict) -> str:
+    tag = " ✅维度" if _scored_map.get(d["dataset_id"]) else " 📄原始"
+    return f"{d.get('name', d['dataset_id'])} ({d['dataset_id']}){tag}"
+
+# Default to the last scored dataset
+default_idx = next(
+    (i for i, d in enumerate(datasets) if _scored_map.get(d["dataset_id"])),
+    0,
+)
+
+options = {_opt_label(d): d for d in datasets}
+selected_label = st.selectbox("选择数据集", list(options.keys()), index=default_idx)
 dataset = options[selected_label]
 ddir = get_dataset_dir(dataset["dataset_id"], DEFAULT_PROJECT_ID)
 df = load_prepared_data(ddir)
 num_cols = numeric_columns(df)
+is_scored = _scored_map.get(dataset["dataset_id"], False)
 
 st.subheader("数据预览")
 st.caption(f"{df.shape[0]} 行 × {df.shape[1]} 列")
 st.dataframe(df.head(10), use_container_width=True)
+
+if not is_scored:
+    st.warning("⚠️ 当前数据集是原始问卷数据，不包含维度变量。请回到「数据集管理 → 构建维度」计算维度得分后再来。")
 
 # ---- Quick model presets ----
 st.subheader("快速模型选择")
