@@ -298,4 +298,4 @@ with tab_scoring:
         **{meta['name']}**（`{scored_id}`）
         共 **{all_scores.shape[1]}** 个维度变量，**{all_scores.shape[0]}** 条记录。
         """)
-        st.link_button("🚀 前往新建 fsQCA 分析", "2_新建fsQCA分析")
+        st.page_link("pages/2_新建fsQCA分析.py", label="🚀 前往新建 fsQCA 分析", icon="🚀")
