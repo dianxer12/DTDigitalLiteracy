@@ -5,6 +5,7 @@ __pycache__/
 .Rhistory
 .Rproj.user/
 Rplots.pdf
+.pytest_cache/
 
 workspace/projects/*
 !workspace/projects/.gitkeep
