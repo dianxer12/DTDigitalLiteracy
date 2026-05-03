@@ -283,7 +283,7 @@ with tab_scoring:
                 f"{dataset['name']}_scored", Path("scored_data.csv"),
             )
             st.session_state["last_scored_id"] = scored_id
-            st.success(f"维度得分已保存：{scored_id}")
+            st.success(f"✅ 维度得分已保存！")
 
         st.subheader("维度得分预览")
         st.dataframe(all_scores.head(20), use_container_width=True)
@@ -291,4 +291,11 @@ with tab_scoring:
         st.subheader("描述统计")
         st.dataframe(all_scores.describe().T, use_container_width=True)
 
-        st.info(f"👉 前往「新建fsQCA分析」，选择「{meta['name']}」开始分析")
+        st.markdown(f"""
+        ---
+        ### 🎉 维度数据集已创建
+
+        **{meta['name']}**（`{scored_id}`）
+        共 **{all_scores.shape[1]}** 个维度变量，**{all_scores.shape[0]}** 条记录。
+        """)
+        st.link_button("🚀 前往新建 fsQCA 分析", "2_新建fsQCA分析")
