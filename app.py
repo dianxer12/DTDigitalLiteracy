@@ -25,12 +25,12 @@ col3.metric("分析记录数量", len(runs))
 st.divider()
 st.subheader("数据集列表")
 if datasets:
-    st.dataframe(dataframe_from_json(datasets), use_container_width=True)
+    st.dataframe(dataframe_from_json(datasets), width="stretch")
 else:
     st.info("还没有数据集。请进入「数据集管理」页面上传 Excel 或 CSV。")
 
 st.subheader("分析记录列表")
 if runs:
-    st.dataframe(dataframe_from_json(runs), use_container_width=True)
+    st.dataframe(dataframe_from_json(runs), width="stretch")
 else:
     st.info("还没有分析记录。请进入「新建fsQCA分析」页面创建分析。")

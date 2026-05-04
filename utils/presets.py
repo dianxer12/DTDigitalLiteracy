@@ -124,5 +124,14 @@ def get_default_presets() -> list[ScaleDefinition]:
     return list(build_presets().values())
 
 
+def get_variable_labels() -> dict[str, str]:
+    """Return a mapping from variable names to Chinese labels."""
+    labels: dict[str, str] = {}
+    for scale in get_default_presets():
+        for dim in scale.dimensions:
+            labels[dim.name] = dim.label
+    return labels
+
+
 # For backward-compatible import
 PRESET_SCALES = get_default_presets()

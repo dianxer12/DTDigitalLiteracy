@@ -36,6 +36,14 @@ conditions <- unlist(config$conditions)
 all_vars <- c(outcome, conditions)
 dat <- dat %>% mutate(across(all_of(all_vars), as.numeric))
 
+# Helper: translate variable name to Chinese label
+var_labels <- config$variable_labels
+if (is.null(var_labels)) var_labels <- list()
+label_of <- function(var_name) {
+  lbl <- var_labels[[var_name]]
+  if (is.null(lbl) || lbl == "") var_name else lbl
+}
+
 get_thresholds <- function(var) {
   th <- unlist(config$calibration[[var]]$thresholds)
   if (length(th) != 3 || any(is.na(th))) {
@@ -100,7 +108,7 @@ if (run_low) {
   )
   write_csv(data.frame(output = necessity_low_txt), file.path(tables_dir, "necessity_low.csv"))
 } else {
-  necessity_low_txt <- "Low outcome analysis disabled."
+  necessity_low_txt <- "未运行低结果分析。"
   write_csv(data.frame(output = necessity_low_txt), file.path(tables_dir, "necessity_low.csv"))
 }
 
@@ -147,18 +155,22 @@ if (run_low) {
     error = function(e) e
   )
 } else {
-  tt_low_df <- data.frame(message = "Low outcome analysis disabled.")
+  tt_low_df <- data.frame(message = "未运行低结果分析。")
   write_csv(tt_low_df, file.path(tables_dir, "truth_table_low.csv"))
-  sol_low <- "Low outcome analysis disabled."
+  sol_low <- "未运行低结果分析。"
 }
 
 solution_txt <- c(
-  "fsQCA Solutions",
+  "fsQCA 解",
   "",
-  "High outcome solution:",
+  "变量名对照：",
+  paste0("  ", outcome, " = ", label_of(outcome), "（结果变量）"),
+  unlist(lapply(conditions, function(v) paste0("  ", v, " = ", label_of(v)))),
+  "",
+  "高结果解：",
   capture.output(print(sol_high)),
   "",
-  "Low outcome solution:",
+  "低结果解：",
   capture.output(print(sol_low))
 )
 writeLines(solution_txt, file.path(files_dir, "qca_solutions.txt"), useBytes = TRUE)
@@ -178,7 +190,7 @@ write_xlsx(
 fig_df <- data.frame(
   x = c(1, 1, 2.8, 2.8, 4.4),
   y = c(3, 2, 3, 2, 2.5),
-  label = c(conditions[1], ifelse(length(conditions) >= 2, conditions[2], ""), "Configuration A", "Configuration B", outcome),
+  label = c(label_of(conditions[1]), ifelse(length(conditions) >= 2, label_of(conditions[2]), ""), "组态A", "组态B", label_of(outcome)),
   type = c("condition", "condition", "config", "config", "outcome")
 )
 fig_df <- fig_df[fig_df$label != "", ]
@@ -196,18 +208,19 @@ p <- ggplot(fig_df, aes(x, y)) +
 ggsave(file.path(figures_dir, "configuration_path.png"), p, width = 10, height = 5, dpi = 180)
 svg_lines <- c(
   '<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="500" viewBox="0 0 1000 500">',
+  '<style>text { font-family: "PingFang SC", "STHeiti", "Hiragino Sans GB", "Arial Unicode MS", "Heiti SC", sans-serif; }</style>',
   '<defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="#2E7D32"/></marker></defs>',
   '<rect width="100%" height="100%" fill="white"/>',
   '<rect x="70" y="160" width="220" height="70" fill="#E8F3EA" stroke="#2E7D32" stroke-width="3"/>',
-  paste0('<text x="180" y="202" text-anchor="middle" font-size="18">', conditions[1], '</text>'),
+  paste0('<text x="180" y="202" text-anchor="middle" font-size="18">', label_of(conditions[1]), '</text>'),
   '<rect x="70" y="270" width="220" height="70" fill="#E8F3EA" stroke="#2E7D32" stroke-width="3"/>',
-  paste0('<text x="180" y="312" text-anchor="middle" font-size="18">', ifelse(length(conditions) >= 2, conditions[2], ""), '</text>'),
+  paste0('<text x="180" y="312" text-anchor="middle" font-size="18">', ifelse(length(conditions) >= 2, label_of(conditions[2]), ""), '</text>'),
   '<rect x="410" y="160" width="220" height="70" fill="#F2FAF2" stroke="#2E7D32" stroke-width="3"/>',
-  '<text x="520" y="202" text-anchor="middle" font-size="18">Configuration A</text>',
+  '<text x="520" y="202" text-anchor="middle" font-size="18">组态A</text>',
   '<rect x="410" y="270" width="220" height="70" fill="#F2FAF2" stroke="#2E7D32" stroke-width="3"/>',
-  '<text x="520" y="312" text-anchor="middle" font-size="18">Configuration B</text>',
+  '<text x="520" y="312" text-anchor="middle" font-size="18">组态B</text>',
   '<rect x="760" y="215" width="180" height="80" fill="#D9EFD9" stroke="#2E7D32" stroke-width="3"/>',
-  paste0('<text x="850" y="262" text-anchor="middle" font-size="18">', outcome, '</text>'),
+  paste0('<text x="850" y="262" text-anchor="middle" font-size="18">', label_of(outcome), '</text>'),
   '<line x1="290" y1="195" x2="410" y2="195" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>',
   '<line x1="290" y1="305" x2="410" y2="305" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>',
   '<line x1="630" y1="195" x2="760" y2="250" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>',
@@ -216,26 +229,47 @@ svg_lines <- c(
 )
 writeLines(svg_lines, file.path(figures_dir, "configuration_path.svg"), useBytes = TRUE)
 
+# Build markdown thresholds table with Chinese labels
+thresholds_md <- c(
+  "| 变量名 | 中文标签 | 完全不隶属 | 交叉点 | 完全隶属 |",
+  "|--------|----------|------------|--------|----------|",
+  paste(sapply(all_vars, function(v) {
+    th <- get_thresholds(v)
+    sprintf("| %s | %s | %.3f | %.3f | %.3f |", v, label_of(v), th[1], th[2], th[3])
+  }), collapse = "\n")
+)
+
 report <- c(
   "# fsQCA 分析报告",
   "",
   paste0("- 数据集：", config$dataset_name),
-  paste0("- 结果变量：", outcome),
-  paste0("- 条件变量：", paste(conditions, collapse = ", ")),
-  paste0("- incl_cut：", incl_cut),
-  paste0("- pri_cut：", pri_cut),
-  paste0("- n_cut：", n_cut),
+  paste0("- 结果变量：", label_of(outcome), "（", outcome, "）"),
+  paste0("- 条件变量：", paste(mapply(function(v) paste0(label_of(v), "（", v, "）"), conditions), collapse = ", ")),
+  paste0("- 一致性阈值 (incl_cut)：", incl_cut),
+  paste0("- PRI阈值 (pri_cut)：", pri_cut),
+  paste0("- 案例数阈值 (n_cut)：", n_cut),
+  "",
+  "## 变量名对照",
+  "",
+  paste0("| 变量名 | 中文标签 |"),
+  paste0("|--------|----------|"),
+  paste0("| ", outcome, " | ", label_of(outcome), "（结果变量） |"),
+  paste(sapply(conditions, function(v) paste0("| ", v, " | ", label_of(v), " |")), collapse = "\n"),
   "",
   "## 校准锚点",
   "",
-  paste(capture.output(print(thresholds_df)), collapse = "\n"),
+  thresholds_md,
   "",
   "## 高结果解",
   "",
-  paste(capture.output(print(sol_high)), collapse = "\n"),
+  "```",
+  capture.output(print(sol_high)),
+  "```",
   "",
   "## 低结果解",
   "",
-  paste(capture.output(print(sol_low)), collapse = "\n")
+  "```",
+  capture.output(print(sol_low)),
+  "```"
 )
 writeLines(report, file.path(report_dir, "report.md"), useBytes = TRUE)

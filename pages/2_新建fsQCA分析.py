@@ -6,9 +6,18 @@ import streamlit as st
 from utils.dataset_utils import load_prepared_data, numeric_columns, quantile_thresholds
 from utils.file_store import DEFAULT_PROJECT_ID, ensure_default_project, get_dataset_dir, list_datasets, read_json
 from utils.fsqca_runner import create_run, run_fsqca
+from utils.presets import get_variable_labels
 
 
 st.set_page_config(page_title="新建fsQCA分析", layout="wide")
+
+_var_labels = get_variable_labels()
+
+
+def _label_of(v: str) -> str:
+    """Display variable name with Chinese label if available."""
+    lbl = _var_labels.get(v)
+    return f"{lbl} ({v})" if lbl else v
 project_dir = ensure_default_project()
 
 st.title("新建 fsQCA 分析")
@@ -66,7 +75,7 @@ is_scored = _scored_map.get(dataset["dataset_id"], False)
 
 st.subheader("数据预览")
 st.caption(f"{df.shape[0]} 行 × {df.shape[1]} 列")
-st.dataframe(df.head(10), use_container_width=True)
+st.dataframe(df.head(10), width="stretch")
 
 if not is_scored:
     st.warning("⚠️ 当前数据集是原始问卷数据，不包含维度变量。请回到「数据集管理 → 构建维度」计算维度得分后再来。")
@@ -108,24 +117,25 @@ st.subheader("变量选择")
 if preset_choice != "自定义":
     preset = MODEL_PRESETS[preset_choice]
     if preset["outcome"] in num_cols and all(c in num_cols for c in preset["conditions"]):
-        outcome = st.selectbox("Outcome 结果变量", num_cols, index=num_cols.index(preset["outcome"]))
+        outcome = st.selectbox("结果变量 (Outcome)", num_cols, index=num_cols.index(preset["outcome"]), format_func=_label_of)
         default_conds = [c for c in preset["conditions"] if c in num_cols]
     else:
-        outcome = st.selectbox("Outcome 结果变量", num_cols)
+        outcome = st.selectbox("结果变量 (Outcome)", num_cols, format_func=_label_of)
         default_conds = []
 else:
-    outcome = st.selectbox("Outcome 结果变量", num_cols)
+    outcome = st.selectbox("结果变量 (Outcome)", num_cols, format_func=_label_of)
     default_conds = []
 
 condition_candidates = [c for c in num_cols if c != outcome]
 conditions = st.multiselect(
-    "Conditions 条件变量",
+    "条件变量 (Conditions)",
     condition_candidates,
     default=default_conds if default_conds else condition_candidates[: min(5, len(condition_candidates))],
+    format_func=_label_of,
 )
 
 if not outcome or not conditions:
-    st.warning("请选择 outcome 和至少一个 condition。")
+    st.warning("请选择结果变量和至少一个条件变量。")
     st.stop()
 
 # ---- Calibration ----
@@ -135,7 +145,7 @@ st.caption("DC 维度建议手动设为 [2, 3, 4]；DL 结果变量建议 [4, 4.
 calibration = {}
 all_vars = [outcome] + conditions
 for var in all_vars:
-    with st.expander(f"{var} 校准", expanded=True):
+    with st.expander(f"{_label_of(var)} 校准", expanded=True):
         method = st.radio("校准方式", ["quantile", "manual"], horizontal=True, key=f"method_{var}")
         q25, q50, q75 = quantile_thresholds(df[var])
         st.caption(f"自动分位数：P25={q25}, P50={q50}, P75={q75}")
@@ -162,9 +172,9 @@ for var in all_vars:
 # ---- fsQCA parameters ----
 st.subheader("fsQCA 参数")
 c1, c2, c3 = st.columns(3)
-incl_cut = c1.number_input("incl_cut", min_value=0.0, max_value=1.0, value=0.80, step=0.01)
-pri_cut = c2.number_input("pri_cut", min_value=0.0, max_value=1.0, value=0.70, step=0.01)
-n_cut = c3.number_input("n_cut", min_value=1, value=1, step=1)
+incl_cut = c1.number_input("一致性阈值 (incl_cut)", min_value=0.0, max_value=1.0, value=0.80, step=0.01)
+pri_cut = c2.number_input("PRI阈值 (pri_cut)", min_value=0.0, max_value=1.0, value=0.70, step=0.01)
+n_cut = c3.number_input("案例数阈值 (n_cut)", min_value=1, value=1, step=1)
 run_low = st.checkbox("运行低结果分析", value=True)
 robustness = st.checkbox("运行稳健性检验", value=False)
 

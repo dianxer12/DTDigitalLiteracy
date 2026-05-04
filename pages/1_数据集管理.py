@@ -15,6 +15,7 @@ from utils.file_store import (
     DEFAULT_PROJECT_ID,
     copy_uploaded_file,
     datasets_dir,
+    delete_dataset,
     ensure_default_project,
     get_dataset_dir,
     list_datasets,
@@ -71,7 +72,38 @@ with tab_upload:
     if not datasets:
         st.info("暂无数据集。")
     else:
-        st.dataframe(dataframe_from_json(datasets), use_container_width=True)
+        st.dataframe(dataframe_from_json(datasets), width="stretch")
+
+        # Delete dataset – confirmation via session state
+        st.divider()
+        st.caption("删除数据集（包含其所有分析记录）")
+        if "delete_confirm_id" not in st.session_state:
+            st.session_state["delete_confirm_id"] = None
+
+        ds_options = [f"{d['name']} ({d['dataset_id']})" for d in datasets]
+        ds_map = {f"{d['name']} ({d['dataset_id']})": d["dataset_id"] for d in datasets}
+        col_ds, col_btn = st.columns([3, 1])
+        with col_ds:
+            del_choice = st.selectbox("选择要删除的数据集", ds_options, key="del_dataset_select")
+        with col_btn:
+            if st.button("🗑️ 删除", key="del_dataset_btn", type="secondary"):
+                st.session_state["delete_confirm_id"] = ds_map[del_choice]
+
+        if st.session_state["delete_confirm_id"]:
+            target_id = st.session_state["delete_confirm_id"]
+            st.warning(f"⚠️ 确认删除数据集 `{target_id}`？此操作不可撤销，其关联的所有分析记录也会被删除。")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("✅ 确认删除", key="del_confirm", type="primary"):
+                    delete_dataset(target_id)
+                    st.session_state["delete_confirm_id"] = None
+                    st.session_state.pop("del_dataset_select", None)
+                    st.success("已删除。")
+                    st.rerun()
+            with c2:
+                if st.button("❌ 取消", key="del_cancel"):
+                    st.session_state["delete_confirm_id"] = None
+                    st.rerun()
 
 # ========================== TAB: SCORING ======================================
 with tab_scoring:
@@ -104,7 +136,7 @@ with tab_scoring:
             "列名": df.columns.tolist(),
             "示例值": df.iloc[0].astype(str).tolist(),
         })
-        st.dataframe(col_info, use_container_width=True, height=300)
+        st.dataframe(col_info, width="stretch", height=300)
 
     # ---- Step 1: Metadata stripping ----
     st.subheader("步骤1：剔除元数据列")
@@ -203,9 +235,11 @@ with tab_scoring:
                         "中文标签", value=dim.label,
                         key=f"dim_label_{scale_name}_{dim_idx}",
                     )
+                    agg_options = ["mean", "sum"]
                     new_agg = dc3.selectbox(
-                        "聚合", ["mean", "sum"],
+                        "聚合", agg_options,
                         index=0 if dim.aggregation == "mean" else 1,
+                        format_func=lambda x: "均值" if x == "mean" else "求和",
                         key=f"dim_agg_{scale_name}_{dim_idx}",
                     )
 
@@ -286,10 +320,10 @@ with tab_scoring:
             st.success(f"✅ 维度得分已保存！")
 
         st.subheader("维度得分预览")
-        st.dataframe(all_scores.head(20), use_container_width=True)
+        st.dataframe(all_scores.head(20), width="stretch")
 
         st.subheader("描述统计")
-        st.dataframe(all_scores.describe().T, use_container_width=True)
+        st.dataframe(all_scores.describe().T, width="stretch")
 
         st.markdown(f"""
         ---

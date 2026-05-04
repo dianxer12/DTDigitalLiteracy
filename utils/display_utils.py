@@ -18,16 +18,16 @@ def show_json(label: str, data) -> None:
 def show_csv_table(path: Path) -> None:
     st.subheader(path.name)
     try:
-        st.dataframe(pd.read_csv(path), use_container_width=True)
+        st.dataframe(pd.read_csv(path), width="stretch")
     except Exception as exc:
-        st.warning(f"Cannot render {path.name}: {exc}")
+        st.warning(f"无法渲染 {path.name}：{exc}")
 
 
-def download_file(path: Path, label: str | None = None) -> None:
+def download_file(path: Path, label: str | None = None, key_suffix: str = "") -> None:
     st.download_button(
         label or f"下载 {path.name}",
         data=path.read_bytes(),
         file_name=path.name,
         mime="application/octet-stream",
-        key=str(path),
+        key=f"{path}_{key_suffix}",
     )

@@ -80,7 +80,10 @@ def ensure_default_project() -> Path:
 def list_datasets(project_id: str = DEFAULT_PROJECT_ID) -> list[dict]:
     ensure_default_project()
     items = []
-    for path in sorted(datasets_dir(project_id).glob("dataset_*")):
+    ds_dir = datasets_dir(project_id)
+    for path in sorted(ds_dir.iterdir()):
+        if not path.is_dir():
+            continue
         meta = read_json(path / "dataset.json")
         if meta:
             items.append(meta)
@@ -120,6 +123,26 @@ def copy_file(src: Path, dest: Path) -> None:
     shutil.copy2(src, dest)
 
 
+def delete_dataset(dataset_id: str, project_id: str = DEFAULT_PROJECT_ID) -> bool:
+    """Delete a dataset and its directory. Returns True on success."""
+    ds_dir = datasets_dir(project_id) / dataset_id
+    if ds_dir.exists():
+        shutil.rmtree(ds_dir, ignore_errors=True)
+        update_project_index(project_id)
+        return True
+    return False
+
+
+def delete_run(run_id: str, project_id: str = DEFAULT_PROJECT_ID) -> bool:
+    """Delete an analysis run and its directory. Returns True on success."""
+    run_dir = analyses_dir(project_id) / run_id
+    if run_dir.exists():
+        shutil.rmtree(run_dir, ignore_errors=True)
+        update_project_index(project_id)
+        return True
+    return False
+
+
 def update_project_index(project_id: str = DEFAULT_PROJECT_ID) -> None:
     pdir = project_dir(project_id)
     dataset_ids = []
@@ -127,8 +150,8 @@ def update_project_index(project_id: str = DEFAULT_PROJECT_ID) -> None:
     datasets_path = pdir / "datasets"
     analyses_path = pdir / "analyses"
     if datasets_path.exists():
-        for path in sorted(datasets_path.glob("dataset_*")):
-            if (path / "dataset.json").exists():
+        for path in sorted(datasets_path.iterdir()):
+            if path.is_dir() and (path / "dataset.json").exists():
                 dataset_ids.append(path.name)
     if analyses_path.exists():
         for path in sorted(analyses_path.glob("run_*")):
