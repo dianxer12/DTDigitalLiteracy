@@ -17,7 +17,69 @@ CSV_LABELS = {
     "necessity_low.csv": "必要条件分析（低结果）",
     "truth_table_high.csv": "真值表（高结果）",
     "truth_table_low.csv": "真值表（低结果）",
+    "solution_metrics_high.csv": "组态路径指标（高结果）",
+    "solution_metrics_low.csv": "组态路径指标（低结果）",
+    "solution_overall_high.csv": "总体解指标（高结果）",
+    "solution_overall_low.csv": "总体解指标（低结果）",
+    "config_table_high.csv": "组态路径表（核心/边缘条件·高结果）",
+    "config_table_low.csv": "组态路径表（核心/边缘条件·低结果）",
 }
+
+# --- Config table CSV → styled dataframe ───────────────────────────────────
+def _render_config_table(csv_path):
+    """Render config_table CSV with core/peripheral symbols."""
+    df = pd.read_csv(csv_path)
+    if df.empty:
+        st.info("无解。")
+        return
+
+    # Pivot: conditions as rows, paths as columns
+    status_map = {
+        "core_present": "● 核心",
+        "peripheral_present": "● 边缘",
+        "core_absent": "⊗ 核心缺",
+        "peripheral_absent": "⊙ 边缘缺",
+        "irrelevant": "—",
+    }
+
+    # Build display table
+    paths = df["path"].unique()
+    conditions = df["condition"].unique()
+    cond_labels = {}
+    for _, row in df.iterrows():
+        if row["condition"] not in cond_labels:
+            cond_labels[row["condition"]] = row["label"]
+
+    # Highlight function
+    def highlight(val):
+        if val.startswith("●"):
+            return "background-color: #DBEAFE; color: #1E40AF; font-weight: 600;"
+        elif val.startswith("⊗"):
+            return "background-color: #FEE2E2; color: #DC2626; font-weight: 600;"
+        elif val.startswith("⊙"):
+            return "background-color: #FEF2F2; color: #EF4444;"
+        elif val.startswith("●"):
+            return "background-color: #EFF6FF; color: #60A5FA;"
+        return ""
+
+    display_df = pd.DataFrame({"条件": [cond_labels.get(c, c) for c in conditions]})
+    for path in paths:
+        col_vals = []
+        for cond in conditions:
+            r = df[(df["path"] == path) & (df["condition"] == cond)]
+            col_vals.append(status_map.get(r["status"].values[0], "?") if len(r) > 0 else "?")
+        display_df[path] = col_vals
+
+    st.dataframe(display_df.style.applymap(highlight, subset=paths.tolist()), width="stretch", hide_index=True)
+
+    # Legend
+    st.caption("● 核心条件存在 ｜ ● 边缘条件存在 ｜ ⊗ 核心条件缺失 ｜ ⊙ 边缘条件缺失 ｜ — 无关紧要")
+
+    # Metrics summary per path
+    st.markdown("**各路径指标：**")
+    for path in paths:
+        row = df[df["path"] == path].iloc[0]
+        st.caption(f"{path}：一致性={row['consistency']:.4f}  原始覆盖率={row['raw_coverage']:.4f}")
 
 inject_css()
 study_id = render_sidebar_nav()
@@ -98,17 +160,34 @@ with tab_report:
 # Tab 2: Figures
 # ============================================================================
 with tab_figures:
-    png_files = sorted(figures_dir.glob("*.png"))
-    svg_files = sorted(figures_dir.glob("*.svg"))
+    config_svg = figures_dir / "config_table.svg"
+    bars_png = figures_dir / "solution_bars.png"
+    bars_low = figures_dir / "solution_bars_low.png"
+    old_png = figures_dir / "configuration_path.png"
 
-    if png_files or svg_files:
-        st.subheader("组态路径图")
-        for path in png_files:
-            st.image(str(path), caption="组态路径图 (PNG)", width="stretch")
-        for path in svg_files:
-            st.image(str(path), caption="组态路径图 (SVG)", width="stretch")
-    else:
-        st.info("暂无结果图片。")
+    if config_svg.exists():
+        st.subheader("组态路径表（核心/边缘条件）")
+        st.image(str(config_svg), width="stretch")
+
+    if bars_png.exists():
+        st.subheader("路径一致性 & 覆盖率")
+        st.image(str(bars_png), width="stretch")
+
+    if bars_low.exists():
+        st.subheader("低结果路径一致性 & 覆盖率")
+        st.image(str(bars_low), width="stretch")
+
+    # Fallback: old generic figure
+    if not config_svg.exists() and not bars_png.exists():
+        other_pngs = sorted(figures_dir.glob("*.png"))
+        other_svgs = sorted(figures_dir.glob("*.svg"))
+        if other_pngs or other_svgs:
+            for p in other_pngs:
+                st.image(str(p), caption=p.name, width="stretch")
+            for p in other_svgs:
+                st.image(str(p), caption=p.name, width="stretch")
+        else:
+            st.info("暂无结果图片。")
 
 # ============================================================================
 # Tab 3: Data tables
@@ -116,7 +195,16 @@ with tab_figures:
 with tab_tables:
     csv_files = sorted(tables_dir.glob("*.csv"))
     if csv_files:
+        # Show config table first with special rendering
+        config_csv = tables_dir / "config_table_high.csv"
+        if config_csv.exists():
+            st.subheader("组态路径表（高结果·中间解）")
+            _render_config_table(config_csv)
+            st.divider()
+
         for path in csv_files:
+            if path.name in ("config_table_high.csv", "config_table_low.csv"):
+                continue  # handled above
             label = CSV_LABELS.get(path.name, path.name)
             with st.expander(f"📄 {label}", expanded=False):
                 try:

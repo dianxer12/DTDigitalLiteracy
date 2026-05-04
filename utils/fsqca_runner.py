@@ -21,107 +21,94 @@ def _svg_escape(value: str) -> str:
     )
 
 
-# Map of Chinese font files found on macOS – used for matplotlib
-_CN_FONT_CANDIDATES = [
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/AssetsV2/com_apple_MobileAsset_Font7/eb257c12d1a51c8c661b89f30eec56cacf9b8987.asset/AssetData/STHEITI.ttf",
-    "/System/Library/Fonts/STHeiti Light.ttc",
-    "/System/Library/Fonts/STHeiti Medium.ttc",
-]
-
-
 def _cn_font_properties():
-    """Return a FontProperties for the first available Chinese font, or fallback."""
+    """Return FontProperties for the first available Chinese font on macOS."""
     from matplotlib import font_manager as fm
 
-    for fp in _CN_FONT_CANDIDATES:
-        if Path(fp).exists():
-            return fm.FontProperties(fname=fp)
-    # Fallback: try the sans-serif config
+    # Preferred Chinese fonts in order — PingFang is the best for modern macOS
+    preferred = [
+        "PingFang SC", "PingFang HK", "PingFang TC",
+        "Heiti SC", "Heiti TC", "STHeiti",
+        "Lantinghei SC", "Songti SC", "Kaiti SC",
+        "Noto Sans CJK SC", "Noto Sans SC",
+    ]
+    for f in fm.fontManager.ttflist:
+        if f.name in preferred:
+            return fm.FontProperties(fname=f.fname)
+    # Fallback: pick any font with a Chinese-looking name
+    for f in fm.fontManager.ttflist:
+        if any(k in f.name.lower() for k in ("sc", "tc", "cn", "hei", "song", "ming", "kai", "ping")):
+            return fm.FontProperties(fname=f.fname)
     return None
 
 
 def generate_configuration_figures(run_dir: Path) -> None:
-    """Generate lightweight configuration figures in Python.
+    """Generate solution metrics bar chart from R output.
 
-    R still performs fsQCA. Figures are generated here to avoid platform-specific
-    R graphics device issues and to keep PNG/SVG output stable.
+    R already generates the primary figures (solution_bars.png, config_table.svg).
+    This generates a supplementary Python chart as a reliable fallback.
     """
-    config = __import__("json").loads((run_dir / "config.json").read_text(encoding="utf-8"))
-    figures_dir = ensure_dir(run_dir / "output" / "figures")
-    outcome = config["outcome"]
-    conditions = config.get("conditions", [])
-    c1 = conditions[0] if len(conditions) > 0 else "condition_1"
-    c2 = conditions[1] if len(conditions) > 1 else "condition_2"
-    var_labels = config.get("variable_labels", {})
-    c1_label = var_labels.get(c1, c1)
-    c2_label = var_labels.get(c2, c2)
-    outcome_label = var_labels.get(outcome, outcome)
+    import json
 
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620">
-<style>
-  text {{ font-family: "PingFang SC", "STHeiti", "Hiragino Sans GB", "Arial Unicode MS", "Heiti SC", sans-serif; }}
-</style>
-<defs>
-  <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
-    <path d="M0,0 L0,6 L9,3 z" fill="#2E7D32"/>
-  </marker>
-</defs>
-<rect width="100%" height="100%" fill="white"/>
-<text x="600" y="70" text-anchor="middle" font-size="30" font-weight="700">fsQCA 组态路径</text>
-<rect x="100" y="190" width="260" height="80" fill="#E8F3EA" stroke="#2E7D32" stroke-width="3"/>
-<text x="230" y="238" text-anchor="middle" font-size="20">{_svg_escape(c1_label)}</text>
-<rect x="100" y="330" width="260" height="80" fill="#E8F3EA" stroke="#2E7D32" stroke-width="3"/>
-<text x="230" y="378" text-anchor="middle" font-size="20">{_svg_escape(c2_label)}</text>
-<rect x="500" y="190" width="260" height="80" fill="#F2FAF2" stroke="#2E7D32" stroke-width="3"/>
-<text x="630" y="238" text-anchor="middle" font-size="20">组态A</text>
-<rect x="500" y="330" width="260" height="80" fill="#F2FAF2" stroke="#2E7D32" stroke-width="3"/>
-<text x="630" y="378" text-anchor="middle" font-size="20">组态B</text>
-<rect x="920" y="260" width="210" height="90" fill="#D9EFD9" stroke="#2E7D32" stroke-width="3"/>
-<text x="1025" y="313" text-anchor="middle" font-size="20">{_svg_escape(outcome_label)}</text>
-<line x1="360" y1="230" x2="500" y2="230" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>
-<line x1="360" y1="370" x2="500" y2="370" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>
-<line x1="760" y1="230" x2="920" y2="300" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>
-<line x1="760" y1="370" x2="920" y2="315" stroke="#2E7D32" stroke-width="3" marker-end="url(#arrow)"/>
-</svg>"""
-    (figures_dir / "configuration_path.svg").write_text(svg, encoding="utf-8")
+    figures_dir = ensure_dir(run_dir / "output" / "figures")
+    tables_dir = run_dir / "output" / "tables"
+
+    # If R already generated figures, skip (they are primary)
+    if (figures_dir / "solution_bars.png").exists() and (figures_dir / "config_table.svg").exists():
+        return
+
+    config = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+    var_labels = config.get("variable_labels", {})
+
+    # Try to read solution metrics from R output
+    metrics_path = tables_dir / "solution_metrics_high.csv"
+    if not metrics_path.exists():
+        return
 
     try:
         import matplotlib
-
         matplotlib.use("Agg")
         from matplotlib import pyplot as plt
-        from matplotlib.patches import FancyArrowPatch, Rectangle
 
         cn_font = _cn_font_properties()
 
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=180)
-        ax.set_xlim(0, 10)
-        ax.set_ylim(0, 5)
-        ax.axis("off")
-        fig.patch.set_facecolor("white")
+        df = pd.read_csv(metrics_path)
+        inter = df[df["solution_type"] == "intermediate"]
+        if inter.empty:
+            return
 
-        def box(x, y, w, h, label, fc):
-            ax.add_patch(Rectangle((x - w / 2, y - h / 2), w, h, facecolor=fc, edgecolor="#2E7D32", linewidth=1.5))
-            ax.text(x, y, label, ha="center", va="center", fontsize=10, fontproperties=cn_font)
+        paths = inter["path"].tolist()
+        cons = inter["consistency"].tolist()
+        covs = inter["raw_coverage"].tolist()
 
-        def arrow(x1, y1, x2, y2):
-            ax.add_patch(FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="->", mutation_scale=14, linewidth=1.5, color="#2E7D32"))
+        x = range(len(paths))
+        w = 0.35
 
-        ax.text(5, 4.6, "fsQCA 组态路径", ha="center", fontsize=15, fontweight="bold", fontproperties=cn_font)
-        box(1.7, 3.2, 2.2, 0.65, c1_label, "#E8F3EA")
-        box(1.7, 2.0, 2.2, 0.65, c2_label, "#E8F3EA")
-        box(5.0, 3.2, 2.2, 0.65, "组态A", "#F2FAF2")
-        box(5.0, 2.0, 2.2, 0.65, "组态B", "#F2FAF2")
-        box(8.3, 2.6, 1.8, 0.75, outcome_label, "#D9EFD9")
-        arrow(2.8, 3.2, 3.9, 3.2)
-        arrow(2.8, 2.0, 3.9, 2.0)
-        arrow(6.1, 3.2, 7.4, 2.75)
-        arrow(6.1, 2.0, 7.4, 2.45)
-        fig.savefig(figures_dir / "configuration_path.png", bbox_inches="tight", pad_inches=0.2)
+        fig, ax = plt.subplots(figsize=(8, 5), dpi=150)
+        ax.bar([i - w/2 for i in x], cons, w, label="一致性", color="#2563EB")
+        ax.bar([i + w/2 for i in x], covs, w, label="原始覆盖率", color="#F59E0B")
+
+        for i in x:
+            ax.text(i - w/2, cons[i] + 0.02, f"{cons[i]:.3f}", ha="center", fontsize=9)
+            ax.text(i + w/2, covs[i] + 0.02, f"{covs[i]:.3f}", ha="center", fontsize=9)
+
+        outcome = config.get("outcome", "")
+        outcome_label = var_labels.get(outcome, outcome)
+
+        ax.set_title(f"高{outcome_label}的组态路径指标", fontproperties=cn_font, fontsize=14, fontweight="bold")
+        ax.set_xticks(list(x))
+        ax.set_xticklabels(paths)
+        ax.set_ylim(0, 1.15)
+        ax.legend(loc="upper right")
+        ax.set_ylabel("")
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+
+        fig.tight_layout()
+        fig.savefig(figures_dir / "configuration_path.png", dpi=150, bbox_inches="tight")
         plt.close(fig)
-    except Exception as exc:
-        (run_dir / "output" / "logs" / "python_figure_error.log").write_text(str(exc), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def create_run(

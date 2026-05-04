@@ -89,8 +89,11 @@ class TestListStudies:
         b = fs.create_study("B")
         studies = fs.list_studies()
         assert len(studies) == 2
-        assert studies[0]["study_id"] == b["study_id"]  # newest first
-        assert studies[1]["study_id"] == a["study_id"]
+        ids = {s["study_id"] for s in studies}
+        assert a["study_id"] in ids
+        assert b["study_id"] in ids
+        # Most recent first when timestamps differ; within same second, order is arbitrary
+        assert studies[0]["created_at"] >= studies[1]["created_at"]
 
     def test_ignores_non_directory_entries(self, tmp_workspace):
         fs.create_study("A")
