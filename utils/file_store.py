@@ -56,6 +56,10 @@ def analyses_dir(study_id: str) -> Path:
     return study_dir(study_id) / "analyses"
 
 
+def analysis_specs_dir(study_id: str) -> Path:
+    return study_dir(study_id) / "analysis_specs"
+
+
 # ── Study CRUD ─────────────────────────────────────────────────────────────
 
 
@@ -82,6 +86,7 @@ def create_study(name: str, description: str = "") -> dict:
     study_id = new_id("study")
     sdir = study_dir(study_id)
     ensure_dir(sdir / "datasets")
+    ensure_dir(sdir / "analysis_specs")
     ensure_dir(sdir / "analyses")
     meta = {
         "study_id": study_id,
@@ -129,8 +134,79 @@ def list_runs(study_id: str) -> list[dict]:
         if run:
             status = read_json(path / "status.json", {})
             run["status"] = status.get("state", "unknown")
+            config = read_json(path / "config.json", {})
+            if config:
+                run.setdefault("spec_id", config.get("spec_id"))
+                run.setdefault("spec_name", config.get("spec_name"))
+                run.setdefault("algorithm", config.get("algorithm", run.get("algorithm")))
             items.append(run)
     return sorted(items, key=lambda x: (x.get("created_at", ""), x.get("run_id", "")), reverse=True)
+
+
+def list_analysis_specs(study_id: str) -> list[dict]:
+    specs_dir = analysis_specs_dir(study_id)
+    if not specs_dir.exists():
+        return []
+    items = []
+    for path in sorted(specs_dir.glob("spec_*")):
+        spec = read_json(path / "spec.json")
+        if spec:
+            items.append(spec)
+    return sorted(items, key=lambda x: (x.get("updated_at", x.get("created_at", "")), x.get("spec_id", "")), reverse=True)
+
+
+def get_analysis_spec(study_id: str, spec_id: str) -> dict | None:
+    return read_json(analysis_specs_dir(study_id) / spec_id / "spec.json", None)
+
+
+def create_analysis_spec(
+    study_id: str,
+    *,
+    name: str,
+    algorithm: str,
+    dataset_ids: list[str],
+    outcome: str,
+    conditions: list[str],
+    calibration: dict,
+    default_params: dict,
+    description: str = "",
+) -> dict:
+    if not name.strip():
+        raise ValueError("分析方案名称不能为空")
+    spec_id = new_id("spec")
+    spec = {
+        "spec_id": spec_id,
+        "name": name.strip(),
+        "description": description.strip(),
+        "algorithm": algorithm,
+        "dataset_ids": dataset_ids,
+        "outcome": outcome,
+        "conditions": conditions,
+        "calibration": calibration,
+        "default_params": default_params,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    write_json(analysis_specs_dir(study_id) / spec_id / "spec.json", spec)
+    return spec
+
+
+def update_analysis_spec(study_id: str, spec_id: str, updates: dict) -> dict:
+    spec = get_analysis_spec(study_id, spec_id)
+    if not spec:
+        raise FileNotFoundError(f"分析方案不存在：{spec_id}")
+    spec.update(updates)
+    spec["updated_at"] = now_iso()
+    write_json(analysis_specs_dir(study_id) / spec_id / "spec.json", spec)
+    return spec
+
+
+def delete_analysis_spec(study_id: str, spec_id: str) -> bool:
+    path = analysis_specs_dir(study_id) / spec_id
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+        return True
+    return False
 
 
 def get_dataset_dir(dataset_id: str, study_id: str) -> Path:
@@ -199,9 +275,10 @@ def migrate_legacy_projects() -> bool:
     study_id = new_id("study")
     sdir = study_dir(study_id)
     ensure_dir(sdir / "datasets")
+    ensure_dir(sdir / "analysis_specs")
     ensure_dir(sdir / "analyses")
 
-    for sub in ["datasets", "analyses"]:
+    for sub in ["datasets", "analyses", "analysis_specs"]:
         src = old_dir / sub
         if src.exists():
             shutil.copytree(src, sdir / sub, dirs_exist_ok=True)

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-import json
-
 import pandas as pd
 import streamlit as st
 
+from utils.ai_interpreter import (
+    AI_PROVIDERS,
+    generate_interpretation,
+    interpretation_key,
+    load_interpretations,
+)
 from utils.display_utils import download_file
-from utils.file_store import delete_run, get_run_dir, list_runs, read_json
+from utils.file_store import delete_run, get_run_dir, list_analysis_specs, list_runs, read_json
+from utils.fsqca_runner import _formula_to_label, _friendly_metric_table, _variable_label
 from utils.style import inject_css, render_sidebar_nav
 
 # --- CSV filename → Chinese label mapping ---
@@ -24,6 +29,186 @@ CSV_LABELS = {
     "config_table_high.csv": "组态路径表（核心/边缘条件·高结果）",
     "config_table_low.csv": "组态路径表（核心/边缘条件·低结果）",
 }
+
+
+def _solution_type_label(value: str) -> str:
+    return {
+        "intermediate": "中间解",
+        "parsimonious": "精简解",
+        "complex": "复杂解",
+    }.get(str(value), str(value))
+
+
+def _friendly_column_name(name: str, var_labels: dict[str, str]) -> str:
+    if name.startswith("f_"):
+        return f"校准值：{_variable_label(name, var_labels)}"
+    if name in var_labels:
+        return var_labels[name]
+    return {
+        "OUT": "结果",
+        "n": "案例数",
+        "incl": "一致性",
+        "PRI": "PRI",
+        "cases": "案例",
+        "condition": "条件",
+        "variable": "变量",
+        "label": "中文标签",
+        "full_exclusion": "完全不隶属",
+        "crossover": "交叉点",
+        "full_inclusion": "完全隶属",
+        "consistency": "一致性",
+        "coverage": "覆盖率",
+        "solution_type": "解类型",
+        "solution_consistency": "总体一致性",
+        "solution_coverage": "总体覆盖率",
+        "n_paths": "路径数",
+        "path": "路径",
+        "raw_coverage": "原始覆盖率",
+        "unique_coverage": "唯一覆盖率",
+    }.get(name, name)
+
+
+def _friendly_table(path, var_labels: dict[str, str]) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    if df.empty:
+        return df
+
+    if path.name.startswith("solution_metrics"):
+        df = _friendly_metric_table(df, var_labels)
+    else:
+        if "formula" in df.columns:
+            df["组态路径"] = df["formula"].map(lambda x: _formula_to_label(x, var_labels))
+            df = df.drop(columns=["formula"])
+        if "condition" in df.columns:
+            df["condition"] = df["condition"].map(lambda x: _variable_label(str(x), var_labels, include_code=True))
+        if "variable" in df.columns:
+            df["variable"] = df["variable"].map(lambda x: _variable_label(str(x), var_labels, include_code=True))
+        if "solution_type" in df.columns:
+            df["solution_type"] = df["solution_type"].map(_solution_type_label)
+        df = df.rename(columns={c: _friendly_column_name(c, var_labels) for c in df.columns})
+
+    if "解类型" in df.columns:
+        df["解类型"] = df["解类型"].map(_solution_type_label)
+    return df
+
+
+def _render_config_summary(config: dict, var_labels: dict[str, str]) -> None:
+    outcome = config.get("outcome", "")
+    conditions = config.get("conditions", [])
+    rows = [
+        {"项目": "数据集", "内容": config.get("dataset_name", "-")},
+        {"项目": "结果变量", "内容": f"{_variable_label(outcome, var_labels)}（{outcome}）"},
+        {"项目": "条件变量", "内容": "；".join(f"{_variable_label(v, var_labels)}（{v}）" for v in conditions)},
+        {"项目": "一致性阈值", "内容": config.get("incl_cut")},
+        {"项目": "PRI 阈值", "内容": config.get("pri_cut")},
+        {"项目": "频数阈值", "内容": config.get("n_cut")},
+        {"项目": "低结果分析", "内容": "是" if config.get("run_low") else "否"},
+        {"项目": "稳健性检验", "内容": "是" if config.get("robustness") else "否"},
+    ]
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+
+def _run_label(run: dict) -> str:
+    return f"{run.get('created_at', '')}｜{run.get('dataset_name', '')}｜{run['run_id']}｜{run.get('status', '')}"
+
+
+def _run_summary_rows(runs: list[dict]) -> list[dict]:
+    return [
+        {
+            "运行ID": r.get("run_id"),
+            "数据集": r.get("dataset_name"),
+            "状态": r.get("status"),
+            "创建时间": r.get("created_at"),
+        }
+        for r in runs
+    ]
+
+
+def _label_from_presets(var_name: str) -> str:
+    labels = {
+        "os_work_support": "组织支持-工作支持",
+        "os_value_identity": "组织支持-价值认同",
+        "os_benefit_care": "组织支持-利益关心",
+        "os_total": "组织支持-总量表",
+        "we_vigor": "工作投入-活力",
+        "we_dedication": "工作投入-奉献",
+        "we_absorption": "工作投入-专注",
+        "we_total": "工作投入-总量表",
+        "dc_professional_engagement": "数字胜任力-专业参与",
+        "dc_digital_resources": "数字胜任力-数字资源",
+        "dc_teaching_learning": "数字胜任力-教学与学习",
+        "dc_assessment_feedback": "数字胜任力-评价与反馈",
+        "dc_empowering_learners": "数字胜任力-促进学习者发展",
+        "dc_facilitating_digital": "数字胜任力-促进数字能力",
+        "dc_total": "数字胜任力-总量表",
+        "dl_total": "数字素养-总量表",
+    }
+    label = labels.get(var_name)
+    return f"{label}（{var_name}）" if label else var_name
+
+
+def _render_ai_settings(scope: str) -> dict:
+    st.markdown("**AI 解读设置**")
+    provider_names = list(AI_PROVIDERS.keys())
+    provider = st.selectbox("服务商", provider_names, key=f"ai_provider_{scope}")
+    preset = AI_PROVIDERS[provider]
+    default_base = st.session_state.get(f"ai_base_url_{scope}", preset.base_url)
+    default_model = st.session_state.get(f"ai_model_{scope}", preset.model)
+    if st.session_state.get(f"ai_provider_prev_{scope}") != provider:
+        default_base = preset.base_url
+        default_model = preset.model
+        st.session_state[f"ai_provider_prev_{scope}"] = provider
+    c1, c2 = st.columns(2)
+    with c1:
+        base_url = st.text_input("API Base URL", value=default_base, key=f"ai_base_url_{scope}")
+    with c2:
+        model = st.text_input("模型", value=default_model, key=f"ai_model_{scope}")
+    api_key = st.text_input("API Token", type="password", key=f"ai_token_{scope}")
+    st.caption(f"{preset.note} 也可以改成任何 OpenAI-compatible 的 base URL。Token 只保存在当前页面会话中。")
+    return {
+        "provider": provider,
+        "base_url": base_url.strip(),
+        "model": model.strip(),
+        "api_key": api_key,
+    }
+
+
+def _render_interpretation(
+    run_dir,
+    target_type: str,
+    target_id: str,
+    title: str,
+    ai_settings: dict,
+    saved: dict,
+) -> None:
+    key = interpretation_key(target_type, target_id)
+    existing = saved.get(key, {})
+    if existing.get("content"):
+        with st.expander(f"AI 解读：{title}", expanded=False):
+            st.caption(f"{existing.get('provider', '')} / {existing.get('model', '')} ｜ {existing.get('created_at', '')}")
+            st.markdown(existing["content"])
+
+    if st.button(f"生成/更新 AI 解读：{title}", key=f"ai_{target_type}_{target_id}"):
+        if not ai_settings["api_key"]:
+            st.warning("请先在上方填写 API Token。")
+            return
+        with st.spinner("正在把结构化数据发送给 AI 生成解读..."):
+            try:
+                content = generate_interpretation(
+                    run_dir=run_dir,
+                    target_type=target_type,
+                    target_id=target_id,
+                    api_key=ai_settings["api_key"],
+                    base_url=ai_settings["base_url"],
+                    model=ai_settings["model"],
+                    provider=ai_settings["provider"],
+                )
+            except Exception as exc:
+                st.error(str(exc))
+                return
+        st.success("AI 解读已生成。")
+        st.markdown(content)
+
 
 # --- Config table CSV → styled dataframe ───────────────────────────────────
 def _render_config_table(csv_path):
@@ -90,19 +275,63 @@ if not runs:
     st.info("暂无分析记录。")
     st.stop()
 
-options = {f"{r['run_id']} | {r.get('dataset_name', '')} | {r.get('status', '')}": r["run_id"] for r in runs}
-option_keys = list(options.keys())
-# Ensure the stored selectbox value is still valid after deletion
-sel_key = "run_select"
+specs = list_analysis_specs(study_id)
+spec_by_id = {s["spec_id"]: s for s in specs}
+group_options: dict[str, str] = {}
+for spec in specs:
+    count = sum(1 for r in runs if r.get("spec_id") == spec["spec_id"])
+    group_options[f"{spec['name']}｜{count} 次运行｜{spec['spec_id']}"] = spec["spec_id"]
+unlinked_runs = [r for r in runs if not r.get("spec_id")]
+if unlinked_runs:
+    group_options[f"未关联方案｜{len(unlinked_runs)} 次运行"] = "__unlinked__"
+
+if not group_options:
+    group_options["全部运行记录"] = "__all__"
+
+group_keys = list(group_options.keys())
+group_key = "result_spec_select"
+if group_key in st.session_state and st.session_state[group_key] not in group_keys:
+    del st.session_state[group_key]
+selected_group_label = st.selectbox("选择分析方案", group_keys, key=group_key)
+selected_spec_id = group_options[selected_group_label]
+
+if selected_spec_id == "__unlinked__":
+    group_runs = unlinked_runs
+    selected_spec = None
+elif selected_spec_id == "__all__":
+    group_runs = runs
+    selected_spec = None
+else:
+    selected_spec = spec_by_id.get(selected_spec_id)
+    group_runs = [r for r in runs if r.get("spec_id") == selected_spec_id]
+
+if selected_spec:
+    params = selected_spec.get("default_params", {})
+    with st.container(border=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("方案", selected_spec.get("name", ""))
+        c2.metric("算法", selected_spec.get("algorithm", "-"))
+        c3.metric("运行次数", len(group_runs))
+        c4.metric("默认阈值", f"{params.get('incl_cut', '-')}/{params.get('pri_cut', '-')}")
+        st.caption("结果变量：" + _label_from_presets(selected_spec.get("outcome", "")))
+        st.caption("条件变量：" + "；".join(_label_from_presets(v) for v in selected_spec.get("conditions", [])))
+
+if group_runs:
+    st.subheader("方案运行历史")
+    st.dataframe(pd.DataFrame(_run_summary_rows(group_runs)), width="stretch", hide_index=True)
+else:
+    st.info("该方案还没有运行记录。")
+    st.stop()
+
+run_options = {_run_label(r): r["run_id"] for r in group_runs}
+option_keys = list(run_options.keys())
+sel_key = f"run_select_{selected_spec_id}"
 if sel_key in st.session_state and st.session_state[sel_key] not in option_keys:
     del st.session_state[sel_key]
-default_idx = 0
-if sel_key in st.session_state:
-    default_idx = option_keys.index(st.session_state[sel_key])
 
 col_sel, col_del = st.columns([4, 1])
 with col_sel:
-    run_id = options[st.selectbox("选择分析记录", option_keys, index=default_idx, key=sel_key)]
+    run_id = run_options[st.selectbox("选择运行记录", option_keys, key=sel_key)]
 
 # --- Delete run ---
 with col_del:
@@ -131,12 +360,14 @@ run_dir = get_run_dir(run_id, study_id)
 
 status = read_json(run_dir / "status.json", {})
 config = read_json(run_dir / "config.json", {})
+var_labels = config.get("variable_labels", {})
 
 tables_dir = run_dir / "output" / "tables"
 figures_dir = run_dir / "output" / "figures"
 report_dir = run_dir / "output" / "report"
 files_dir = run_dir / "output" / "files"
 logs_dir = run_dir / "output" / "logs"
+interpretations = load_interpretations(run_dir)
 
 # --- Status badge ---
 state = status.get("state", "unknown")
@@ -160,31 +391,33 @@ with tab_report:
 # Tab 2: Figures
 # ============================================================================
 with tab_figures:
+    with st.expander("AI 解读设置", expanded=False):
+        ai_settings_figures = _render_ai_settings("figures")
+
     config_svg = figures_dir / "config_table.svg"
-    bars_png = figures_dir / "solution_bars.png"
-    bars_low = figures_dir / "solution_bars_low.png"
-    old_png = figures_dir / "configuration_path.png"
+    bars_svg = figures_dir / "solution_bars.svg"
+    bars_low = figures_dir / "solution_bars_low.svg"
 
     if config_svg.exists():
         st.subheader("组态路径表（核心/边缘条件）")
         st.image(str(config_svg), width="stretch")
+        _render_interpretation(run_dir, "figure", "config_table_high", "组态路径表（高结果）", ai_settings_figures, interpretations)
 
-    if bars_png.exists():
+    if bars_svg.exists():
         st.subheader("路径一致性 & 覆盖率")
-        st.image(str(bars_png), width="stretch")
+        st.image(str(bars_svg), width="stretch")
+        _render_interpretation(run_dir, "figure", "solution_bars_high", "路径一致性与覆盖率（高结果）", ai_settings_figures, interpretations)
 
     if bars_low.exists():
         st.subheader("低结果路径一致性 & 覆盖率")
         st.image(str(bars_low), width="stretch")
+        _render_interpretation(run_dir, "figure", "solution_bars_low", "路径一致性与覆盖率（低结果）", ai_settings_figures, interpretations)
 
     # Fallback: old generic figure
-    if not config_svg.exists() and not bars_png.exists():
-        other_pngs = sorted(figures_dir.glob("*.png"))
-        other_svgs = sorted(figures_dir.glob("*.svg"))
-        if other_pngs or other_svgs:
-            for p in other_pngs:
-                st.image(str(p), caption=p.name, width="stretch")
-            for p in other_svgs:
+    if not config_svg.exists() and not bars_svg.exists():
+        other_figures = sorted(list(figures_dir.glob("*.png")) + list(figures_dir.glob("*.svg")))
+        if other_figures:
+            for p in other_figures:
                 st.image(str(p), caption=p.name, width="stretch")
         else:
             st.info("暂无结果图片。")
@@ -193,6 +426,9 @@ with tab_figures:
 # Tab 3: Data tables
 # ============================================================================
 with tab_tables:
+    with st.expander("AI 解读设置", expanded=False):
+        ai_settings_tables = _render_ai_settings("tables")
+
     csv_files = sorted(tables_dir.glob("*.csv"))
     if csv_files:
         # Show config table first with special rendering
@@ -200,6 +436,7 @@ with tab_tables:
         if config_csv.exists():
             st.subheader("组态路径表（高结果·中间解）")
             _render_config_table(config_csv)
+            _render_interpretation(run_dir, "table", "config_table_high.csv", "组态路径表（高结果·中间解）", ai_settings_tables, interpretations)
             st.divider()
 
         for path in csv_files:
@@ -208,9 +445,10 @@ with tab_tables:
             label = CSV_LABELS.get(path.name, path.name)
             with st.expander(f"📄 {label}", expanded=False):
                 try:
-                    st.dataframe(pd.read_csv(path), width="stretch")
+                    st.dataframe(_friendly_table(path, var_labels), width="stretch")
                 except Exception as exc:
                     st.warning(f"无法渲染：{exc}")
+                _render_interpretation(run_dir, "table", path.name, label, ai_settings_tables, interpretations)
                 download_file(path, label=f"下载 {label}")
     else:
         st.info("没有 CSV 结果表。")
@@ -224,11 +462,11 @@ with tab_config:
         st.json(status)
 
     # Config
-    with st.expander("🔧 分析配置 (config.json)", expanded=False):
-        st.code(json.dumps(config, ensure_ascii=False, indent=2), language="json")
+    with st.expander("🔧 分析配置", expanded=False):
+        _render_config_summary(config, var_labels)
 
     # Logs
-    with st.expander("📜 运行日志", expanded=False):
+    with st.expander("📜 技术日志（调试用）", expanded=False):
         stdout_log = logs_dir / "stdout.log"
         stderr_log = logs_dir / "stderr.log"
         if stdout_log.exists():

@@ -5,7 +5,7 @@ args <- commandArgs(trailingOnly = TRUE)
 if (length(args) < 1) stop("Usage: Rscript scripts/run_fsqca.R <run_dir>")
 run_dir <- normalizePath(args[[1]], mustWork = TRUE)
 
-packages <- c("QCA", "jsonlite", "readr", "dplyr", "writexl", "ggplot2", "tidyr")
+packages <- c("QCA", "jsonlite", "readr", "dplyr", "writexl")
 installed <- rownames(installed.packages())
 missing <- setdiff(packages, installed)
 if (length(missing) > 0) {
@@ -17,8 +17,6 @@ library(jsonlite)
 library(readr)
 library(dplyr)
 library(writexl)
-library(ggplot2)
-library(tidyr)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 input_dir <- file.path(run_dir, "input")
@@ -102,17 +100,17 @@ run_robust <- isTRUE(config$robustness)
 run_necessity <- function(data, outcome_col, cond_cols, neg_outcome = FALSE) {
   # Use only calibrated columns (f_ prefix) to avoid pof validation error
   cal_cols <- c(outcome_col, cond_cols)
-  cal_data <- data[, cal_cols, drop = FALSE]
+  cal_data <- as.data.frame(data[, cal_cols, drop = FALSE])
   rows <- lapply(cond_cols, function(cond) {
     res <- tryCatch(
-      pof(data = cal_data, outcome = outcome_col, relation = "necessity",
-          conditions = cond, neg.out = neg_outcome),
+      pof(setms = cal_data[[cond]], outcome = cal_data[[outcome_col]],
+          relation = "necessity", neg.out = neg_outcome),
       error = function(e) NULL
     )
-    if (is.null(res)) {
+    if (is.null(res) || is.null(res$incl.cov) || nrow(res$incl.cov) < 1) {
       c(NA_real_, NA_real_)
     } else {
-      c(round(res$incl.cov[1, 1], 4), round(res$incl.cov[1, 2], 4))
+      c(round(res$incl.cov[1, "inclN"], 4), round(res$incl.cov[1, "covN"], 4))
     }
   })
   data.frame(
@@ -189,16 +187,22 @@ run_solutions <- function(tt) {
 sol_high <- run_solutions(tt_high)
 
 # ── Extract solution metrics as structured table ───────────────────────────
-# New QCA package (≥3.0): sol$IC is a QCA_pof list with $overall$incl.cov
+get_solution_pof <- function(sol) {
+  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC)) return(NULL)
+  if (!is.null(sol$IC$overall)) return(sol$IC$overall)
+  sol$IC
+}
+
 extract_metrics <- function(sol, sol_name) {
-  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC$overall)) {
+  ic <- get_solution_pof(sol)
+  if (is.null(ic)) {
     return(data.frame(
       path = character(0), solution_type = character(0),
       consistency = numeric(0), raw_coverage = numeric(0), unique_coverage = numeric(0),
       formula = character(0), stringsAsFactors = FALSE
     ))
   }
-  icdf <- sol$IC$overall$incl.cov
+  icdf <- ic$incl.cov
   if (is.null(icdf) || nrow(icdf) == 0) {
     return(data.frame(
       path = character(0), solution_type = character(0),
@@ -219,15 +223,16 @@ extract_metrics <- function(sol, sol_name) {
 }
 
 extract_overall <- function(sol, sol_name) {
-  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC$overall)) {
+  ic <- get_solution_pof(sol)
+  if (is.null(ic)) {
     return(data.frame(
       solution_type = sol_name, solution_consistency = NA_real_,
       solution_coverage = NA_real_, n_paths = 0L,
       stringsAsFactors = FALSE
     ))
   }
-  si <- sol$IC$overall$sol.incl.cov
-  icdf <- sol$IC$overall$incl.cov
+  si <- ic$sol.incl.cov
+  icdf <- ic$incl.cov
   n_paths <- if (is.null(icdf)) 0L else nrow(icdf)
   data.frame(
     solution_type = sol_name,
@@ -258,8 +263,9 @@ if (!is.null(sol_high)) {
   sol_int <- sol_high$intermediate
   sol_par <- sol_high$parsimonious
 
-  # New QCA: IC is a list with $overall$incl.cov (data.frame, one row per path)
-  icdf <- sol_int$IC$overall$incl.cov
+  sol_int_ic <- get_solution_pof(sol_int)
+  sol_par_ic <- get_solution_pof(sol_par)
+  icdf <- if (is.null(sol_int_ic)) NULL else sol_int_ic$incl.cov
   n_paths <- if (is.null(icdf)) 0L else nrow(icdf)
 
   if (n_paths > 0) {
@@ -269,25 +275,32 @@ if (!is.null(sol_high)) {
     formulas_int <- rownames(icdf)
 
     # Parsimonious formula for core/peripheral comparison
-    formulas_par <- if (!is.null(sol_par) && !is.null(sol_par$IC$overall$incl.cov)) {
-      rownames(sol_par$IC$overall$incl.cov)
+    formulas_par <- if (!is.null(sol_par_ic) && !is.null(sol_par_ic$incl.cov)) {
+      rownames(sol_par_ic$incl.cov)
     } else { character(0) }
-    par_text <- paste(formulas_par, collapse = " ")
+    formula_tokens <- function(expr) {
+      tokens <- unlist(strsplit(expr, "\\s*[+*]\\s*"))
+      trimws(tokens[tokens != ""])
+    }
+    par_tokens <- unique(unlist(lapply(formulas_par, formula_tokens)))
 
     for (p in seq_len(n_paths)) {
       path_expr <- formulas_int[p]
+      path_tokens <- formula_tokens(path_expr)
 
       for (j in seq_along(conditions)) {
         v <- conditions[j]
         v_label <- label_of(v)
+        term <- paste0("f_", v)
+        neg_term <- paste0("~", term)
 
         # Determine presence/absence in this path
-        is_neg <- grepl(paste0("~", v), path_expr, fixed = TRUE)
-        in_sol <- grepl(v, path_expr, fixed = TRUE)
+        is_neg <- neg_term %in% path_tokens
+        in_sol <- term %in% path_tokens
 
         # Core vs peripheral: does this condition also appear in parsimonious?
-        is_neg_par <- grepl(paste0("~", v), par_text, fixed = TRUE)
-        in_par <- grepl(v, par_text, fixed = TRUE)
+        is_neg_par <- neg_term %in% par_tokens
+        in_par <- term %in% par_tokens
 
         status <- if (is_neg) {
           if (is_neg_par) "core_absent" else "peripheral_absent"
@@ -423,193 +436,7 @@ if (run_robust) {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 6. FIGURES — real solution path diagram + consistency/coverage bar chart
-# ═══════════════════════════════════════════════════════════════════════════
-
-# --- Figure 1: Solution consistency & coverage bar chart ---
-generate_bar_chart <- function(metrics_df, overall_df, outcome_label, file_png) {
-  if (is.null(metrics_df) || nrow(metrics_df) == 0) return(FALSE)
-  inter <- metrics_df %>% filter(solution_type == "intermediate")
-  if (nrow(inter) == 0) return(FALSE)
-
-  inter$path_label <- paste0(inter$path, "\n", inter$formula)
-  plot_df <- inter %>%
-    select(path_label, consistency, raw_coverage) %>%
-    pivot_longer(-path_label, names_to = "metric", values_to = "value")
-
-  p <- ggplot(plot_df, aes(x = path_label, y = value, fill = metric)) +
-    geom_col(position = "dodge", width = 0.6) +
-    geom_text(aes(label = sprintf("%.3f", value)),
-              position = position_dodge(0.6), vjust = -0.3, size = 3.5) +
-    scale_fill_manual(
-      values = c(consistency = "#2563EB", raw_coverage = "#F59E0B"),
-      labels = c(consistency = "一致性", raw_coverage = "原始覆盖率")
-    ) +
-    scale_y_continuous(limits = c(0, 1.1), expand = c(0, 0)) +
-    labs(
-      title = paste0("高结果（", outcome_label, "）组态路径指标"),
-      x = "", y = "", fill = ""
-    ) +
-    theme_minimal(base_family = "") +
-    theme(
-      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
-      legend.position = "bottom",
-      panel.grid.major.x = element_blank(),
-      axis.text.x = element_text(size = 10)
-    )
-
-  ggsave(file_png, p, width = 8, height = 5, dpi = 150)
-  return(TRUE)
-}
-
-if (!is.null(sol_high)) {
-  ov_high <- read_csv(file.path(tables_dir, "solution_overall_high.csv"), show_col_types = FALSE)
-  generate_bar_chart(
-    read_csv(file.path(tables_dir, "solution_metrics_high.csv"), show_col_types = FALSE),
-    ov_high,
-    label_of(outcome),
-    file.path(figures_dir, "solution_bars.png")
-  )
-}
-
-if (run_low && !is.null(sol_low)) {
-  ov_low_file <- file.path(tables_dir, "solution_overall_low.csv")
-  met_low_file <- file.path(tables_dir, "solution_metrics_low.csv")
-  if (file.exists(ov_low_file) && file.exists(met_low_file)) {
-    generate_bar_chart(
-      read_csv(met_low_file, show_col_types = FALSE),
-      read_csv(ov_low_file, show_col_types = FALSE),
-      paste0("非", label_of(outcome)),
-      file.path(figures_dir, "solution_bars_low.png")
-    )
-  }
-}
-
-# --- Figure 2: Configuration table as SVG (core/peripheral) ---
-svg_config_table <- function(config_df, file_svg, title) {
-  if (is.null(config_df) || nrow(config_df) == 0) return(FALSE)
-
-  paths <- unique(config_df$path)
-  conds <- unique(config_df$condition)
-  n_c <- length(conds)
-  n_p <- length(paths)
-
-  cell_w <- 140; cell_h <- 36
-  label_w <- 140; header_h <- 50
-  total_w <- label_w + n_p * cell_w + 40
-  total_h <- header_h + n_c * cell_h + 60
-
-  status_symbol <- function(s) {
-    switch(s,
-      core_present = "●",
-      peripheral_present = "●",
-      core_absent = "⊗",
-      peripheral_absent = "⊙",
-      ""
-    )
-  }
-  status_color <- function(s) {
-    switch(s,
-      core_present = "#1E40AF",
-      peripheral_present = "#60A5FA",
-      core_absent = "#DC2626",
-      peripheral_absent = "#FCA5A5",
-      "#CBD5E1"
-    )
-  }
-  status_size <- function(s) {
-    if (grepl("core", s)) "20" else "16"
-  }
-
-  svg_lines <- c(
-    sprintf('<svg xmlns="http://www.w3.org/2000/svg" width="%d" height="%d" viewBox="0 0 %d %d">',
-            total_w, total_h, total_w, total_h),
-    '<style>',
-    'text { font-family: "PingFang SC", "STHeiti", "Hiragino Sans GB", "Arial Unicode MS", "Heiti SC", sans-serif; }',
-    '.header { fill: #FEF3C7; stroke: #D97706; stroke-width: 1.5; }',
-    '.cell { fill: #FFFFFF; stroke: #E2E8F0; stroke-width: 0.5; }',
-    '.label-cell { fill: #FFFBEB; stroke: #E2E8F0; stroke-width: 0.5; }',
-    '</style>',
-    '<rect width="100%" height="100%" fill="white"/>',
-    # Title
-    sprintf('<text x="%d" y="30" text-anchor="middle" font-size="16" font-weight="bold" fill="#92400E">%s</text>',
-            total_w / 2, title),
-    # Path headers
-    sprintf('<rect x="%d" y="35" width="%d" height="%d" class="header"/>',
-            label_w, total_w - label_w - 20, header_h - 10),
-    sprintf('<text x="%d" y="65" text-anchor="middle" font-size="13" font-weight="600" fill="#92400E">%s</text>',
-            label_w + (total_w - label_w - 20) / 2, "组态路径")
-  )
-
-  # Column headers
-  for (pi in seq_along(paths)) {
-    x <- label_w + (pi - 1) * cell_w + cell_w / 2
-    svg_lines <- c(svg_lines, sprintf(
-      '<text x="%d" y="65" text-anchor="middle" font-size="12" font-weight="600" fill="#1E40AF">%s</text>',
-      x, paths[pi]
-    ))
-  }
-
-  # Rows
-  for (ci in seq_along(conds)) {
-    y <- header_h + (ci - 1) * cell_h + cell_h / 2
-    # Label
-    svg_lines <- c(svg_lines,
-      sprintf('<rect x="5" y="%d" width="%d" height="%d" class="label-cell"/>',
-              header_h + (ci - 1) * cell_h, label_w - 10, cell_h),
-      sprintf('<text x="%d" y="%d" text-anchor="end" font-size="11" fill="#0F172A">%s</text>',
-              label_w - 15, header_h + (ci - 1) * cell_h + cell_h - 12, config_df$label[config_df$condition == conds[ci] & config_df$path == paths[1]])
-    )
-    # Cells
-    for (pi in seq_along(paths)) {
-      row <- config_df[config_df$path == paths[pi] & config_df$condition == conds[ci], ]
-      if (nrow(row) == 0) next
-      sx <- label_w + (pi - 1) * cell_w
-      sy <- header_h + (ci - 1) * cell_h
-      sym <- status_symbol(row$status)
-      clr <- status_color(row$status)
-      fsize <- status_size(row$status)
-
-      svg_lines <- c(svg_lines,
-        sprintf('<rect x="%d" y="%d" width="%d" height="%d" class="cell"/>',
-                sx, sy, cell_w, cell_h),
-        sprintf('<text x="%d" y="%d" text-anchor="middle" font-size="%s" fill="%s">%s</text>',
-                sx + cell_w / 2, sy + cell_h - 11, fsize, clr, sym)
-      )
-    }
-  }
-
-  # Legend
-  ly <- total_h - 15
-  legend_items <- c(
-    list(c("● 核心条件存在", "#1E40AF")),
-    list(c("● 边缘条件存在", "#60A5FA")),
-    list(c("⊗ 核心条件缺失", "#DC2626")),
-    list(c("⊙ 边缘条件缺失", "#FCA5A5"))
-  )
-  for (li in seq_along(legend_items)) {
-    lx <- label_w + (li - 1) * 150
-    svg_lines <- c(svg_lines, sprintf(
-      '<text x="%d" y="%d" font-size="10" fill="%s">%s</text>',
-      lx, ly, legend_items[[li]][2], legend_items[[li]][1]
-    ))
-  }
-
-  svg_lines <- c(svg_lines, '</svg>')
-  writeLines(svg_lines, file_svg, useBytes = TRUE)
-  return(TRUE)
-}
-
-if (exists("config_table_high") && nrow(config_table_high) > 0) {
-  svg_config_table(
-    config_table_high,
-    file.path(figures_dir, "config_table.svg"),
-    paste0("高", label_of(outcome), "的组态路径（中间解）")
-  )
-}
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 7. EXPORT Excel
+# 6. EXPORT Excel
 # ═══════════════════════════════════════════════════════════════════════════
 excel_sheets <- list(
   calibration_thresholds = thresholds_df,
@@ -624,127 +451,3 @@ if (run_low && exists("config_table_low"))
 if (run_low && exists("nec_low_df")) excel_sheets$necessity_low <- nec_low_df
 
 write_xlsx(excel_sheets, file.path(files_dir, "qca_results.xlsx"))
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 8. REPORT — markdown with interpretation
-# ═══════════════════════════════════════════════════════════════════════════
-build_report <- function() {
-  lines <- c(
-    "# fsQCA 分析报告",
-    "",
-    "## 1. 分析概况",
-    "",
-    paste0("- 数据集：", config$dataset_name),
-    paste0("- 结果变量：", label_of(outcome), "（", outcome, "）"),
-    paste0("- 条件变量："),
-    paste(sapply(conditions, function(v) paste0("  - ", label_of(v), "（", v, "）")), collapse = "\n"),
-    paste0("- 一致性阈值：", incl_cut),
-    paste0("- PRI阈值：", pri_cut),
-    paste0("- 频数阈值：", n_cut),
-    "",
-    "## 2. 校准锚点",
-    "",
-    "| 变量 | 中文标签 | 完全不隶属 | 交叉点 | 完全隶属 |",
-    "|------|----------|------------|--------|----------|",
-    paste(sapply(all_vars, function(v) {
-      th <- get_thresholds(v)
-      sprintf("| %s | %s | %.3f | %.3f | %.3f |", v, label_of(v), th[1], th[2], th[3])
-    }), collapse = "\n"),
-    "",
-    "## 3. 必要条件分析",
-    "",
-    "| 条件 | 中文标签 | 一致性 | 覆盖率 |",
-    "|------|----------|--------|--------|",
-    paste(sapply(seq_len(nrow(nec_high_df)), function(i) {
-      sprintf("| %s | %s | %.4f | %.4f |",
-              gsub("^f_", "", nec_high_df$condition[i]),
-              nec_high_df$label[i],
-              nec_high_df$consistency[i],
-              nec_high_df$coverage[i])
-    }), collapse = "\n"),
-    ""
-  )
-
-  # Necessity interpretation
-  nec_sig <- nec_high_df[!is.na(nec_high_df$consistency) & nec_high_df$consistency >= 0.90, ]
-  if (nrow(nec_sig) > 0) {
-    lines <- c(lines,
-      paste0("**解读：** ", paste(sapply(seq_len(nrow(nec_sig)), function(i)
-        paste0(nec_sig$label[i], "（一致性=", sprintf("%.4f", nec_sig$consistency[i]), "）")
-      ), collapse = "、"), "的一致性达到0.90的判断标准，可能构成", label_of(outcome), "的必要条件。但必要条件不等于充分条件，需结合组态分析进一步解释。"),
-      ""
-    )
-  } else {
-    lines <- c(lines,
-      "**解读：** 各单项条件的一致性均未达到0.90的判断标准，说明单一条件并不构成结果产生的必要条件。这表明结果的形成更可能依赖多个条件之间的组合效应，适合进一步开展组态分析。",
-      ""
-    )
-  }
-
-  # Solution results
-  lines <- c(lines,
-    "## 4. 充分条件组态分析（高结果）",
-    ""
-  )
-
-  if (exists("overall_high") && nrow(overall_high) > 0) {
-    ov <- overall_high[overall_high$solution_type == "intermediate", ]
-    if (nrow(ov) > 0 && ov$n_paths > 0) {
-      lines <- c(lines,
-        paste0("中间解共识别出 **", ov$n_paths, "条** 通向高", label_of(outcome), "的组态路径。"),
-        paste0("总体解一致性：", sprintf("%.4f", ov$solution_consistency),
-               "，总体解覆盖度：", sprintf("%.4f", ov$solution_coverage)),
-        ""
-      )
-      if (exists("metrics_high") && nrow(metrics_high) > 0) {
-        met <- metrics_high[metrics_high$solution_type == "intermediate", ]
-        lines <- c(lines,
-          "| 路径 | 一致性 | 原始覆盖率 | 唯一覆盖率 |",
-          "|------|--------|------------|------------|",
-          paste(sapply(seq_len(nrow(met)), function(i)
-            sprintf("| %s | %.4f | %.4f | %.4f |",
-                    met$path[i], met$consistency[i],
-                    met$raw_coverage[i], met$unique_coverage[i])
-          ), collapse = "\n"),
-          ""
-        )
-      }
-    }
-  } else {
-    lines <- c(lines, "未获得充分条件解。", "")
-  }
-
-  # Low outcome
-  if (run_low) {
-    lines <- c(lines, "## 5. 充分条件组态分析（低结果）", "")
-    low_file <- file.path(tables_dir, "solution_overall_low.csv")
-    if (file.exists(low_file)) {
-      ov_low <- read_csv(low_file, show_col_types = FALSE)
-      if (nrow(ov_low) > 0) {
-        ovl <- ov_low[ov_low$solution_type == "intermediate", ]
-        if (nrow(ovl) > 0 && ovl$n_paths > 0) {
-          lines <- c(lines,
-            paste0("中间解共识别出 **", ovl$n_paths, "条** 通向低", label_of(outcome), "的组态路径。"),
-            paste0("总体解一致性：", sprintf("%.4f", ovl$solution_consistency),
-                   "，总体解覆盖度：", sprintf("%.4f", ovl$solution_coverage)),
-            ""
-          )
-        }
-      }
-    }
-  }
-
-  lines <- c(lines,
-    "## 6. 因果非对称性",
-    "",
-    "**解读：** fsQCA的核心优势之一是揭示因果非对称性。高结果和低结果的组态路径通常不是简单的镜像反转，而是由不同的条件组合驱动。这意味着促进高水平结果的条件组合，与导致低水平结果的条件组合可能具有不同的逻辑。",
-    "",
-    "---",
-    "*本报告由 fsQCA 科研分析平台自动生成。核心条件：●（既见于精简解又见于中间解）；边缘条件：•（仅见于中间解）。*"
-  )
-
-  lines
-}
-
-report_lines <- build_report()
-writeLines(report_lines, file.path(report_dir, "report.md"), useBytes = TRUE)

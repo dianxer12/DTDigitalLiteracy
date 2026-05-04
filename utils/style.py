@@ -189,6 +189,7 @@ def render_sidebar_nav():
 
     Returns study_id from the study selector, or None.
     """
+    from utils.file_store import list_analysis_specs, list_datasets, list_runs
     from utils.study_selector import study_selector
 
     with st.sidebar:
@@ -198,13 +199,20 @@ def render_sidebar_nav():
 
         st.divider()
 
-        st.markdown("### 导航")
-        st.page_link("app.py", label="首页仪表盘", icon=":material/dashboard:")
-        st.page_link("pages/1_数据集管理.py", label="数据集管理", icon=":material/folder:")
-        st.page_link("pages/2_新建fsQCA分析.py", label="新建fsQCA分析", icon=":material/experiment:")
-        st.page_link("pages/3_分析结果.py", label="分析结果", icon=":material/description:")
+        if study_id:
+            datasets = list_datasets(study_id)
+            specs = list_analysis_specs(study_id)
+            runs = list_runs(study_id)
+            st.markdown("### 当前研究结构")
+            st.caption(f"数据集 {len(datasets)} 个 ｜ 分析方案 {len(specs)} 个 ｜ 运行结果 {len(runs)} 次")
+
+        st.markdown("### 研究工作台")
+        st.page_link("app.py", label="研究总览", icon=":material/dashboard:")
+        st.page_link("pages/1_数据集管理.py", label="数据集", icon=":material/folder:")
+        st.page_link("pages/2_新建fsQCA分析.py", label="分析方案", icon=":material/schema:")
+        st.page_link("pages/3_分析结果.py", label="运行结果与AI解读", icon=":material/description:")
 
         st.divider()
-        st.caption("文件系统存储 · 无数据库 · fsQCA v1.0")
+        st.caption("研究 → 数据集 / 分析方案 → 运行结果")
 
         return study_id

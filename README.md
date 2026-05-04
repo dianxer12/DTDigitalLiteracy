@@ -29,7 +29,7 @@ pip install -r requirements.txt
 需要先安装 R，并确保命令行可以运行 `Rscript`。
 
 ```r
-install.packages(c("QCA", "jsonlite", "readr", "dplyr", "writexl", "ggplot2"))
+install.packages(c("QCA", "jsonlite", "readr", "dplyr", "writexl"))
 ```
 
 ## 启动 Streamlit
