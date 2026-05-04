@@ -22,13 +22,13 @@ from utils.file_store import (
 )
 from utils.presets import build_presets
 from utils.scoring import DimensionDef, ScaleDefinition, compute_scale_scores
-from utils.study_selector import require_study
+from utils.style import inject_css, render_sidebar_nav
 
 # ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
-st.set_page_config(page_title="数据集管理", layout="wide")
-study_id = require_study()
+inject_css()
+study_id = render_sidebar_nav()
 
 st.title("数据集管理")
 

@@ -7,7 +7,7 @@ import streamlit as st
 
 from utils.display_utils import download_file
 from utils.file_store import delete_run, get_run_dir, list_runs, read_json
-from utils.study_selector import require_study
+from utils.style import inject_css, render_sidebar_nav
 
 # --- CSV filename → Chinese label mapping ---
 CSV_LABELS = {
@@ -19,8 +19,8 @@ CSV_LABELS = {
     "truth_table_low.csv": "真值表（低结果）",
 }
 
-st.set_page_config(page_title="分析结果", layout="wide")
-study_id = require_study()
+inject_css()
+study_id = render_sidebar_nav()
 
 st.title("分析结果")
 runs = list_runs(study_id)

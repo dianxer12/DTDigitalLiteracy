@@ -7,10 +7,10 @@ from utils.dataset_utils import load_prepared_data, numeric_columns, quantile_th
 from utils.file_store import get_dataset_dir, list_datasets, read_json, study_dir
 from utils.fsqca_runner import create_run, run_fsqca
 from utils.presets import get_variable_labels
-from utils.study_selector import require_study
+from utils.style import inject_css, render_sidebar_nav
 
 
-st.set_page_config(page_title="新建fsQCA分析", layout="wide")
+inject_css()
 
 _var_labels = get_variable_labels()
 
@@ -19,7 +19,7 @@ def _label_of(v: str) -> str:
     """Display variable name with Chinese label if available."""
     lbl = _var_labels.get(v)
     return f"{lbl} ({v})" if lbl else v
-study_id = require_study()
+study_id = render_sidebar_nav()
 
 st.title("新建 fsQCA 分析")
 
