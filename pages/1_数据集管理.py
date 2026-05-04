@@ -12,11 +12,9 @@ import streamlit as st
 from utils.dataset_utils import create_metadata, read_table
 from utils.display_utils import dataframe_from_json
 from utils.file_store import (
-    DEFAULT_PROJECT_ID,
     copy_uploaded_file,
     datasets_dir,
     delete_dataset,
-    ensure_default_project,
     get_dataset_dir,
     list_datasets,
     new_id,
@@ -24,12 +22,13 @@ from utils.file_store import (
 )
 from utils.presets import build_presets
 from utils.scoring import DimensionDef, ScaleDefinition, compute_scale_scores
+from utils.study_selector import require_study
 
 # ---------------------------------------------------------------------------
 # Page setup
 # ---------------------------------------------------------------------------
 st.set_page_config(page_title="数据集管理", layout="wide")
-ensure_default_project()
+study_id = require_study()
 
 st.title("数据集管理")
 
@@ -51,7 +50,7 @@ with tab_upload:
 
     if uploaded and st.button("保存并生成元数据", type="primary"):
         dataset_id = new_id("dataset")
-        ddir = datasets_dir(DEFAULT_PROJECT_ID) / dataset_id
+        ddir = datasets_dir(study_id) / dataset_id
         original_dir = ddir / "original"
         temp_original = copy_uploaded_file(uploaded, original_dir)
         try:
@@ -67,7 +66,7 @@ with tab_upload:
             st.error(f"数据集处理失败：{exc}")
 
     st.divider()
-    datasets = list_datasets(DEFAULT_PROJECT_ID)
+    datasets = list_datasets(study_id)
     st.subheader("已有数据集")
     if not datasets:
         st.info("暂无数据集。")
@@ -95,7 +94,7 @@ with tab_upload:
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("✅ 确认删除", key="del_confirm", type="primary"):
-                    delete_dataset(target_id)
+                    delete_dataset(target_id, study_id)
                     st.session_state["delete_confirm_id"] = None
                     st.session_state.pop("del_dataset_select", None)
                     st.success("已删除。")
@@ -109,7 +108,7 @@ with tab_upload:
 with tab_scoring:
     st.subheader("维度构建与计分")
 
-    datasets = list_datasets(DEFAULT_PROJECT_ID)
+    datasets = list_datasets(study_id)
     if not datasets:
         st.info("请先在「上传数据」标签页上传数据。")
         st.stop()
@@ -118,7 +117,7 @@ with tab_scoring:
     options = {f"{d['name']} ({d['dataset_id']})": d for d in datasets}
     selected_label = st.selectbox("选择数据集", list(options.keys()))
     dataset = options[selected_label]
-    ddir = get_dataset_dir(dataset["dataset_id"], DEFAULT_PROJECT_ID)
+    ddir = get_dataset_dir(dataset["dataset_id"], study_id)
     prepared_path = ddir / "prepared" / "data.csv"
 
     if not prepared_path.exists():
@@ -311,7 +310,7 @@ with tab_scoring:
             all_scores = pd.concat(score_dfs, axis=1)
 
             scored_id = new_id("scored")
-            scored_dir = datasets_dir(DEFAULT_PROJECT_ID) / scored_id
+            scored_dir = datasets_dir(study_id) / scored_id
             meta = create_metadata(
                 scored_dir, all_scores, scored_id,
                 f"{dataset['name']}_scored", Path("scored_data.csv"),

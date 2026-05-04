@@ -6,7 +6,8 @@ import pandas as pd
 import streamlit as st
 
 from utils.display_utils import download_file
-from utils.file_store import DEFAULT_PROJECT_ID, delete_run, ensure_default_project, get_run_dir, list_runs, read_json
+from utils.file_store import delete_run, get_run_dir, list_runs, read_json
+from utils.study_selector import require_study
 
 # --- CSV filename → Chinese label mapping ---
 CSV_LABELS = {
@@ -19,10 +20,10 @@ CSV_LABELS = {
 }
 
 st.set_page_config(page_title="分析结果", layout="wide")
-ensure_default_project()
+study_id = require_study()
 
 st.title("分析结果")
-runs = list_runs(DEFAULT_PROJECT_ID)
+runs = list_runs(study_id)
 if not runs:
     st.info("暂无分析记录。")
     st.stop()
@@ -54,7 +55,7 @@ if st.session_state.get("delete_run_confirm"):
     c1, c2 = st.columns(2)
     with c1:
         if st.button("✅ 确认删除", key="del_run_ok", type="primary"):
-            delete_run(run_id)
+            delete_run(run_id, study_id)
             st.session_state["delete_run_confirm"] = False
             st.session_state.pop("run_select", None)
             st.success("已删除。")
@@ -64,7 +65,7 @@ if st.session_state.get("delete_run_confirm"):
             st.session_state["delete_run_confirm"] = False
             st.rerun()
 
-run_dir = get_run_dir(run_id, DEFAULT_PROJECT_ID)
+run_dir = get_run_dir(run_id, study_id)
 
 status = read_json(run_dir / "status.json", {})
 config = read_json(run_dir / "config.json", {})

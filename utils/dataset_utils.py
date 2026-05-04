@@ -83,11 +83,11 @@ def create_metadata(dataset_dir: Path, df: pd.DataFrame, dataset_id: str, name: 
     return dataset
 
 
-def ingest_dataset(project_dir: Path, original_file: Path, display_name: str | None = None) -> dict:
+def ingest_dataset(study_dir: Path, original_file: Path, display_name: str | None = None) -> dict:
     df = read_table(original_file)
     dataset_id = new_id("dataset")
     name = display_name or safe_name(original_file.stem)
-    dataset_dir = project_dir / "datasets" / dataset_id
+    dataset_dir = study_dir / "datasets" / dataset_id
     ensure_dir(dataset_dir / "original")
     stored_original = dataset_dir / "original" / original_file.name
     original_file.replace(stored_original)

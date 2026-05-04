@@ -4,9 +4,10 @@ import pandas as pd
 import streamlit as st
 
 from utils.dataset_utils import load_prepared_data, numeric_columns, quantile_thresholds
-from utils.file_store import DEFAULT_PROJECT_ID, ensure_default_project, get_dataset_dir, list_datasets, read_json
+from utils.file_store import get_dataset_dir, list_datasets, read_json, study_dir
 from utils.fsqca_runner import create_run, run_fsqca
 from utils.presets import get_variable_labels
+from utils.study_selector import require_study
 
 
 st.set_page_config(page_title="新建fsQCA分析", layout="wide")
@@ -18,11 +19,11 @@ def _label_of(v: str) -> str:
     """Display variable name with Chinese label if available."""
     lbl = _var_labels.get(v)
     return f"{lbl} ({v})" if lbl else v
-project_dir = ensure_default_project()
+study_id = require_study()
 
 st.title("新建 fsQCA 分析")
 
-datasets = list_datasets(DEFAULT_PROJECT_ID)
+datasets = list_datasets(study_id)
 if not datasets:
     st.info("请先在「数据集管理」页面上传数据并构建维度。")
     st.stop()
@@ -39,7 +40,7 @@ def _looks_scored(d: dict, df: pd.DataFrame) -> bool:
 _scored_map: dict[str, bool] = {}
 for d in datasets:
     try:
-        _df = load_prepared_data(get_dataset_dir(d["dataset_id"], DEFAULT_PROJECT_ID))
+        _df = load_prepared_data(get_dataset_dir(d["dataset_id"], study_id))
         _scored_map[d["dataset_id"]] = _looks_scored(d, _df)
     except Exception:
         _scored_map[d["dataset_id"]] = False
@@ -68,7 +69,7 @@ default_idx = next(
 options = {_opt_label(d): d for d in datasets}
 selected_label = st.selectbox("选择数据集", list(options.keys()), index=default_idx)
 dataset = options[selected_label]
-ddir = get_dataset_dir(dataset["dataset_id"], DEFAULT_PROJECT_ID)
+ddir = get_dataset_dir(dataset["dataset_id"], study_id)
 df = load_prepared_data(ddir)
 num_cols = numeric_columns(df)
 is_scored = _scored_map.get(dataset["dataset_id"], False)
@@ -180,7 +181,7 @@ robustness = st.checkbox("运行稳健性检验", value=False)
 
 if st.button("创建并运行 fsQCA", type="primary"):
     run_dir = create_run(
-        project_dir=project_dir,
+        study_dir=study_dir(study_id),
         dataset=dataset,
         df=df,
         outcome=outcome,

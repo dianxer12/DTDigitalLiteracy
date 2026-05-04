@@ -125,7 +125,7 @@ def generate_configuration_figures(run_dir: Path) -> None:
 
 
 def create_run(
-    project_dir: Path,
+    study_dir: Path,
     dataset: dict,
     df: pd.DataFrame,
     outcome: str,
@@ -138,7 +138,7 @@ def create_run(
     robustness: bool,
 ) -> Path:
     run_id = new_id("run")
-    run_dir = project_dir / "analyses" / run_id
+    run_dir = study_dir / "analyses" / run_id
     for sub in [
         "input",
         "output/tables",

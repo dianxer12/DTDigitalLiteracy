@@ -7,5 +7,5 @@ __pycache__/
 Rplots.pdf
 .pytest_cache/
 
-workspace/projects/*
-!workspace/projects/.gitkeep
+workspace/studies/*
+!workspace/studies/.gitkeep
