@@ -100,10 +100,12 @@ run_robust <- isTRUE(config$robustness)
 # 1. NECESSITY ANALYSIS — structured tables
 # ═══════════════════════════════════════════════════════════════════════════
 run_necessity <- function(data, outcome_col, cond_cols, neg_outcome = FALSE) {
-  # Use pof() for each condition individually — returns reliable numeric values
+  # Use only calibrated columns (f_ prefix) to avoid pof validation error
+  cal_cols <- c(outcome_col, cond_cols)
+  cal_data <- data[, cal_cols, drop = FALSE]
   rows <- lapply(cond_cols, function(cond) {
     res <- tryCatch(
-      pof(setms = data, outcome = outcome_col, relation = "necessity",
+      pof(data = cal_data, outcome = outcome_col, relation = "necessity",
           conditions = cond, neg.out = neg_outcome),
       error = function(e) NULL
     )
@@ -187,55 +189,50 @@ run_solutions <- function(tt) {
 sol_high <- run_solutions(tt_high)
 
 # ── Extract solution metrics as structured table ───────────────────────────
+# New QCA package (≥3.0): sol$IC is a QCA_pof list with $overall$incl.cov
 extract_metrics <- function(sol, sol_name) {
-  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC)) {
+  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC$overall)) {
     return(data.frame(
       path = character(0), solution_type = character(0),
       consistency = numeric(0), raw_coverage = numeric(0), unique_coverage = numeric(0),
       formula = character(0), stringsAsFactors = FALSE
     ))
   }
-
-  n_paths <- length(sol$IC) - 1  # last element is overall
-  if (n_paths < 1) {
+  icdf <- sol$IC$overall$incl.cov
+  if (is.null(icdf) || nrow(icdf) == 0) {
     return(data.frame(
       path = character(0), solution_type = character(0),
       consistency = numeric(0), raw_coverage = numeric(0), unique_coverage = numeric(0),
       formula = character(0), stringsAsFactors = FALSE
     ))
   }
-
-  formulas <- if (!is.null(sol$solution)) {
-    trimws(strsplit(as.character(sol$solution), "\\+")[[1]])
-  } else {
-    rep("", n_paths)
-  }
-
+  formulas <- rownames(icdf)
   data.frame(
-    path = paste0("H", seq_len(n_paths)),
+    path = paste0("H", seq_len(nrow(icdf))),
     solution_type = sol_name,
-    consistency = round(sol$IC[seq_len(n_paths)], 4),
-    raw_coverage = round(sol$covU[seq_len(n_paths)], 4),
-    unique_coverage = round(sol$covU[seq_len(n_paths)], 4),
-    formula = formulas[seq_len(n_paths)],
+    consistency = round(as.numeric(icdf$inclS), 4),
+    raw_coverage = round(as.numeric(icdf$covS), 4),
+    unique_coverage = round(as.numeric(icdf$covU), 4),
+    formula = formulas,
     stringsAsFactors = FALSE
   )
 }
 
 extract_overall <- function(sol, sol_name) {
-  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC)) {
+  if (is.null(sol) || inherits(sol, "error") || is.null(sol$IC$overall)) {
     return(data.frame(
       solution_type = sol_name, solution_consistency = NA_real_,
       solution_coverage = NA_real_, n_paths = 0L,
       stringsAsFactors = FALSE
     ))
   }
-  n_paths <- length(sol$IC) - 1
-  if (n_paths < 1) n_paths <- 0L
+  si <- sol$IC$overall$sol.incl.cov
+  icdf <- sol$IC$overall$incl.cov
+  n_paths <- if (is.null(icdf)) 0L else nrow(icdf)
   data.frame(
     solution_type = sol_name,
-    solution_consistency = if (n_paths > 0) round(sol$IC[n_paths + 1], 4) else NA_real_,
-    solution_coverage = if (n_paths > 0) round(sol$covU[n_paths + 1], 4) else NA_real_,
+    solution_consistency = if (!is.null(si)) round(as.numeric(si$inclS), 4) else NA_real_,
+    solution_coverage = if (!is.null(si)) round(as.numeric(si$covS), 4) else NA_real_,
     n_paths = n_paths,
     stringsAsFactors = FALSE
   )
@@ -261,33 +258,36 @@ if (!is.null(sol_high)) {
   sol_int <- sol_high$intermediate
   sol_par <- sol_high$parsimonious
 
-  if (!is.null(sol_int) && !is.null(sol_int$IC) && length(sol_int$IC) > 1) {
-    n_paths <- length(sol_int$IC) - 1
+  # New QCA: IC is a list with $overall$incl.cov (data.frame, one row per path)
+  icdf <- sol_int$IC$overall$incl.cov
+  n_paths <- if (is.null(icdf)) 0L else nrow(icdf)
+
+  if (n_paths > 0) {
     config_rows <- list()
 
-    for (p in seq_len(n_paths)) {
-      # Parse the solution formula for this path
-      sol_formula <- trimws(strsplit(as.character(sol_int$solution), "\\+")[[1]])
-      if (p <= length(sol_formula)) {
-        path_expr <- sol_formula[p]
-      } else {
-        path_expr <- ""
-      }
+    # Build formula strings from row names
+    formulas_int <- rownames(icdf)
 
-      # Check each condition
+    # Parsimonious formula for core/peripheral comparison
+    formulas_par <- if (!is.null(sol_par) && !is.null(sol_par$IC$overall$incl.cov)) {
+      rownames(sol_par$IC$overall$incl.cov)
+    } else { character(0) }
+    par_text <- paste(formulas_par, collapse = " ")
+
+    for (p in seq_len(n_paths)) {
+      path_expr <- formulas_int[p]
+
       for (j in seq_along(conditions)) {
         v <- conditions[j]
         v_label <- label_of(v)
-        # Determine presence/absence in solution
-        in_sol <- grepl(v, path_expr, fixed = TRUE)
-        is_neg <- grepl(paste0("~", v), path_expr, fixed = TRUE)
 
-        # Core vs peripheral: check in parsimonious solution
-        par_formula <- if (!is.null(sol_par) && !is.null(sol_par$solution)) {
-          as.character(sol_par$solution)
-        } else { "" }
-        in_par <- grepl(v, par_formula, fixed = TRUE)
-        is_neg_par <- grepl(paste0("~", v), par_formula, fixed = TRUE)
+        # Determine presence/absence in this path
+        is_neg <- grepl(paste0("~", v), path_expr, fixed = TRUE)
+        in_sol <- grepl(v, path_expr, fixed = TRUE)
+
+        # Core vs peripheral: does this condition also appear in parsimonious?
+        is_neg_par <- grepl(paste0("~", v), par_text, fixed = TRUE)
+        in_par <- grepl(v, par_text, fixed = TRUE)
 
         status <- if (is_neg) {
           if (is_neg_par) "core_absent" else "peripheral_absent"
@@ -302,8 +302,8 @@ if (!is.null(sol_high)) {
           condition = v,
           label = v_label,
           status = status,
-          consistency = round(sol_int$IC[p], 4),
-          raw_coverage = round(sol_int$covU[p], 4),
+          consistency = round(as.numeric(icdf$inclS[p]), 4),
+          raw_coverage = round(as.numeric(icdf$covS[p]), 4),
           formula = path_expr,
           stringsAsFactors = FALSE
         )
