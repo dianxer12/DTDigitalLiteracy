@@ -100,25 +100,24 @@ run_robust <- isTRUE(config$robustness)
 # 1. NECESSITY ANALYSIS — structured tables
 # ═══════════════════════════════════════════════════════════════════════════
 run_necessity <- function(data, outcome_col, cond_cols, neg_outcome = FALSE) {
-  result <- tryCatch(
-    superSubset(data, outcome = outcome_col, conditions = cond_cols,
-                relation = "nec", incl.cut = 0.90, neg.out = neg_outcome),
-    error = function(e) NULL
-  )
-  if (is.null(result)) {
-    return(data.frame(
-      condition = cond_cols, label = sapply(cond_cols, function(x)
-        label_of(gsub("^f_", "", x))),
-      consistency = NA_real_, coverage = NA_real_,
-      stringsAsFactors = FALSE
-    ))
-  }
-  df <- as.data.frame(result)
+  # Use pof() for each condition individually — returns reliable numeric values
+  rows <- lapply(cond_cols, function(cond) {
+    res <- tryCatch(
+      pof(setms = data, outcome = outcome_col, relation = "necessity",
+          conditions = cond, neg.out = neg_outcome),
+      error = function(e) NULL
+    )
+    if (is.null(res)) {
+      c(NA_real_, NA_real_)
+    } else {
+      c(round(res$incl.cov[1, 1], 4), round(res$incl.cov[1, 2], 4))
+    }
+  })
   data.frame(
     condition = cond_cols,
     label = sapply(cond_cols, function(x) label_of(gsub("^f_", "", x))),
-    consistency = round(df$incl.cov[, 1], 4),
-    coverage = round(df$incl.cov[, 2], 4),
+    consistency = sapply(rows, `[`, 1),
+    coverage = sapply(rows, `[`, 2),
     stringsAsFactors = FALSE
   )
 }
